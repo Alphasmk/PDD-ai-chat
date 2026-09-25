@@ -1,0 +1,39 @@
+ services:
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: service_test_database
+    env_file: .env.test
+    ports:
+      - "5434:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+  redis_test:
+    image: redis:7-alpine
+    container_name: service_redis_test
+    restart: always
+    ports:
+      - "6380:6379"
+    env_file: .env.test
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+  rabbitmq_test:
+    image: rabbitmq:4-management-alpine
+    container_name: service_rabbitmq_test
+    restart: always
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    env_file: .env.test
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 2s
+      timeout: 2s
+      retries: 5
