@@ -25,39 +25,9 @@ class UserNotFoundError(ApplicationException):
         super().__init__(message)
 
 
-class ActionNotAllowedError(ApplicationException):
-    def __init__(self, err) -> None:
-        message = f"Action not allowed: {err}"
-        super().__init__(message)
-
-
-class UserEditNotAllowedError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot edit this user"
-        super().__init__(message)
-
-
-class UserGetInfoNotAllowed(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot get info about users"
-        super().__init__(message)
-
-
-class ModeratorGetInfoNotAllowed(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot receive information about users not from your group"
-        super().__init__(message)
-
-
 class InvalidCredentialsError(ApplicationException):
     def __init__(self) -> None:
         message = "Incorrect username or password"
-        super().__init__(message)
-
-
-class CannotChangeImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot change custom images other than your own"
         super().__init__(message)
 
 
@@ -82,10 +52,4 @@ class UserHasNoImageError(ApplicationException):
 class ImageReceivingError(ApplicationException):
     def __init__(self) -> None:
         message = "Error loading image"
-        super().__init__(message)
-
-
-class CannotDeleteImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot delete custom images other than your own"
         super().__init__(message)

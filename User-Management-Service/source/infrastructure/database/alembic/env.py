@@ -2,6 +2,7 @@
 import asyncio
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy import pool
+from sqlalchemy.engine import Connection
 
 from logging.config import fileConfig
 
@@ -61,7 +62,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection, target_metadata=target_metadata, compare_type=True
     )
@@ -70,7 +71,7 @@ def do_run_migrations(connection):
         context.run_migrations()
 
 
-async def run_async_migrations():
+async def run_async_migrations() -> None:
     url = config.get_main_option("sqlalchemy.url")
 
     if not url:
@@ -102,7 +103,10 @@ def run_migrations_online() -> None:
     asyncio.run(run_async_migrations())
 
 
-if context.is_offline_mode():
+supplied_connection = config.attributes.get("connection")
+if isinstance(supplied_connection, Connection):
+    do_run_migrations(supplied_connection)
+elif context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()

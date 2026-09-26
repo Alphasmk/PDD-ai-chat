@@ -1,6 +1,6 @@
 """Entity class definition"""
 
-from typing import Any, Self
+from typing import Self
 from dataclasses import dataclass, field
 from source.domain.value_objects import ID
 
@@ -11,7 +11,7 @@ class Entity:
 
     id: ID = field(default_factory=ID)
 
-    def __new__(cls, *_args: Any, **_kwargs: Any) -> Self:
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
         if cls is Entity:
             raise TypeError("Base Entity cannot be instantiated directly.")
         return object.__new__(cls)

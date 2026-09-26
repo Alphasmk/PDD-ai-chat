@@ -1,47 +1,26 @@
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from fastapi import status
-from source.domain.exceptions.raw_password_exceptions import (
+from source.domain.exceptions import (
     PasswordLengthError,
     PasswordPatternError,
+    EmailPatternError,
+    NameLengthError,
+    NamePatternError,
 )
-from source.domain.exceptions.email_exceptions import EmailPatternError
-from source.domain.exceptions.name_exceptions import NameLengthError, NamePatternError
-from source.domain.exceptions import (
-    UserBlockedError,
-    UserDeleteNotAllowedError,
-    CannotBlockAdminError,
-    AdminCannotChangeAdminsRoleError,
-    AdminRegularAssignError,
-    RoleIsUnassignableOrChangable,
-)
-
 from source.application.exceptions import (
-    CannotCreateGroupError,
-    CannotEditGroupError,
-    CannotDeleteGroupError,
-    CannotAddUserToGroupError,
-    CannotGetGroupUsersError,
-    CannotRemoveUserFromGroupError,
-    GroupNotFoundError,
-    GroupAlreadyExistsError,
     InvalidCredentialsError,
     EmailTakenError,
     UsernameTakenError,
     PhoneNumberTaken,
     UserNotFoundError,
-    ActionNotAllowedError,
-    UserEditNotAllowedError,
-    UserGetInfoNotAllowed,
-    ModeratorGetInfoNotAllowed,
-    InvalidSortFieldError,
     TokenExpiredError,
     InvalidTokenError,
     MissingTokenError,
     TokenRevokedError,
-    CannotChangeImageError,
     UploadImageError,
     UserHasNoImageError,
     ImageReceivingError,
-    CannotDeleteImageError,
     DeleteImageError,
 )
 
@@ -56,52 +35,31 @@ GENERAL_ERRORS = {
     EmailTakenError: status.HTTP_409_CONFLICT,
     PhoneNumberTaken: status.HTTP_409_CONFLICT,
 }
-
 AUTH_ERRORS = {
     InvalidCredentialsError: status.HTTP_401_UNAUTHORIZED,
-    TokenExpiredError: status.HTTP_401_UNAUTHORIZED,
-    InvalidTokenError: status.HTTP_401_UNAUTHORIZED,
-    UserBlockedError: status.HTTP_401_UNAUTHORIZED,
-}
-
-USERS_ME_ERRORS = {
     TokenExpiredError: status.HTTP_401_UNAUTHORIZED,
     InvalidTokenError: status.HTTP_401_UNAUTHORIZED,
     MissingTokenError: status.HTTP_401_UNAUTHORIZED,
     TokenRevokedError: status.HTTP_401_UNAUTHORIZED,
 }
-
 USER_ACTIONS_ERRORS = {
-    UserDeleteNotAllowedError: status.HTTP_403_FORBIDDEN,
-    ActionNotAllowedError: status.HTTP_403_FORBIDDEN,
-    UserEditNotAllowedError: status.HTTP_403_FORBIDDEN,
-    UserGetInfoNotAllowed: status.HTTP_403_FORBIDDEN,
-    ModeratorGetInfoNotAllowed: status.HTTP_403_FORBIDDEN,
-    InvalidSortFieldError: status.HTTP_400_BAD_REQUEST,
-    CannotBlockAdminError: status.HTTP_403_FORBIDDEN,
-    AdminCannotChangeAdminsRoleError: status.HTTP_403_FORBIDDEN,
-    AdminRegularAssignError: status.HTTP_403_FORBIDDEN,
-    RoleIsUnassignableOrChangable: status.HTTP_403_FORBIDDEN,
-    CannotChangeImageError: status.HTTP_403_FORBIDDEN,
     UploadImageError: status.HTTP_400_BAD_REQUEST,
     DeleteImageError: status.HTTP_400_BAD_REQUEST,
     UserHasNoImageError: status.HTTP_404_NOT_FOUND,
     ImageReceivingError: status.HTTP_400_BAD_REQUEST,
-    CannotDeleteImageError: status.HTTP_403_FORBIDDEN,
 }
-
-GROUP_ACTIONS_ERRORS = {
-    CannotCreateGroupError: status.HTTP_403_FORBIDDEN,
-    CannotEditGroupError: status.HTTP_403_FORBIDDEN,
-    CannotDeleteGroupError: status.HTTP_403_FORBIDDEN,
-    CannotAddUserToGroupError: status.HTTP_403_FORBIDDEN,
-    CannotRemoveUserFromGroupError: status.HTTP_403_FORBIDDEN,
-    CannotGetGroupUsersError: status.HTTP_403_FORBIDDEN,
-    GroupNotFoundError: status.HTTP_404_NOT_FOUND,
-    GroupAlreadyExistsError: status.HTTP_409_CONFLICT,
-}
-
 AUTH_ERROR_MAP = AUTH_ERRORS | GENERAL_ERRORS
-USERS_ME_ERROR_MAP = USERS_ME_ERRORS | GENERAL_ERRORS
-USER_ACTIONS_MAP = USER_ACTIONS_ERRORS | GENERAL_ERRORS
-GROUP_ACTIONS_MAP = GROUP_ACTIONS_ERRORS | GENERAL_ERRORS
+USERS_ME_ERROR_MAP = AUTH_ERROR_MAP
+USER_ACTIONS_MAP = USER_ACTIONS_ERRORS | AUTH_ERROR_MAP
+
+
+ERROR_STATUS: dict[type[Exception], int] = USER_ACTIONS_MAP
+
+
+async def application_error_handler(
+    request: Request, exception: Exception
+) -> JSONResponse:
+    status_code = ERROR_STATUS.get(type(exception))
+    if status_code is None:
+        raise exception
+    return JSONResponse(status_code=status_code, content={"error": str(exception)})

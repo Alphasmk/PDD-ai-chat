@@ -9,7 +9,6 @@ from source.settings.separated_configs import (
     CacheConfig,
     DatabaseConfig,
     LoggingConfig,
-    SuperUserConfig,
     BrokerConfig,
     StorageConfig,
 )
@@ -18,12 +17,11 @@ from source.settings.separated_configs import (
 class Config:
     """Main configuration class with all configuration classes"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.auth = AuthConfig()
         self.cache = CacheConfig()
         self.database = DatabaseConfig()
         self.logging = LoggingConfig()
-        self.super_user = SuperUserConfig()
         self.broker = BrokerConfig()
         self.storage = StorageConfig()
 

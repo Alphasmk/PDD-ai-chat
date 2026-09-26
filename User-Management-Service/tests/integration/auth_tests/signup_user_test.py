@@ -1,40 +1,63 @@
 import pytest
 from httpx import AsyncClient
-from fastapi import status
-from sqlalchemy import select
-from source.infrastructure.database.models import User
-from source.presentation.api.schemas.auth import UserSignupRequest
+from tests.integration.conftest import signup_payload, response_data
 
 
-@pytest.mark.asyncio(loop_scope="session")
-class TestSignupUser:
-    async def test_success(self, client: AsyncClient, override_db_session_dependency):
-        signup_payload = UserSignupRequest(
-            name="testuser",
-            surname="testuser",
-            username="testuser",
-            password="Test1234",
-            email="test_email@email.com",
-        )
+async def test_signup_shape_and_ignored_fields(client: AsyncClient) -> None:
+    payload = {
+        **signup_payload(),
+        "role": "admin",
+        "group_id": "old",
+        "is_blocked": True,
+        "image_s3_path": "foreign",
+    }
+    response = await client.post("/api/v1/auth/signup", json=payload)
+    assert response.status_code == 201
+    data = response_data(response)
+    assert set(data) == {
+        "id",
+        "name",
+        "surname",
+        "username",
+        "email",
+        "phone_number",
+        "image_s3_path",
+        "created_at",
+        "updated_at",
+    }
+    assert data["image_s3_path"] is None and data["updated_at"] is None
 
-        response = await client.post(
-            "/api/v1/auth/signup", json=signup_payload.model_dump()
-        )
 
-        assert response.status_code == status.HTTP_201_CREATED
+@pytest.mark.parametrize(
+    "field,value,status",
+    [
+        ("name", "A", 400),
+        ("surname", "bad name", 400),
+        ("password", "short", 400),
+        ("email", "invalid", 422),
+    ],
+)
+async def test_invalid_signup(
+    client: AsyncClient, field: str, value: str, status: int
+) -> None:
+    payload = signup_payload()
+    payload[field] = value
+    assert (
+        await client.post("/api/v1/auth/signup", json=payload)
+    ).status_code == status
+    assert (
+        await client.post("/api/v1/auth/signup", json=signup_payload())
+    ).status_code == 201
 
-        response_data = response.json()
-        assert response_data["email"] == signup_payload.email
-        assert response_data["username"] == signup_payload.username
-        assert "id" in response_data
 
-        db_session = override_db_session_dependency
+@pytest.mark.parametrize("field", ["username", "email", "phone_number"])
+async def test_unique_conflicts(client: AsyncClient, field: str) -> None:
+    first = {**signup_payload(), "phone_number": "123"}
+    assert (await client.post("/api/v1/auth/signup", json=first)).status_code == 201
+    second = {**signup_payload("bob"), "phone_number": "456"}
+    second[field] = first[field]
+    assert (await client.post("/api/v1/auth/signup", json=second)).status_code == 409
 
-        query = select(User).where(User.email == signup_payload.email)
-        result = await db_session.execute(query)
-        user_in_db = result.scalar_one_or_none()
 
-        assert user_in_db is not None
-        assert user_in_db.username == signup_payload.username
-
-        assert user_in_db.password_hash != signup_payload.password
+async def test_malformed_signup(client: AsyncClient) -> None:
+    assert (await client.post("/api/v1/auth/signup", json={})).status_code == 422

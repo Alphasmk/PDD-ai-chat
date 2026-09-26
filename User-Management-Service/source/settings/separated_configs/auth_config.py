@@ -9,7 +9,7 @@ class AuthConfig(ConfigBase):
     refresh_token_expire_days: int
 
     @property
-    def auth_data(self) -> dict:
+    def auth_data(self) -> dict[str, SecretStr | str]:
         return {
             "secret_key": self.secret_key,
             "algorithm": self.algorithm,

@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 import logging
 from functools import lru_cache
 from sqlalchemy.ext.asyncio import (
@@ -6,7 +7,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     AsyncSession,
 )
-from source.application.interfaces import IDatabaseSessionmaker
+from source.infrastructure.interfaces import IDatabaseSessionmaker
 
 
 class DatabaseSessionmaker(IDatabaseSessionmaker):
@@ -24,7 +25,7 @@ class DatabaseSessionmaker(IDatabaseSessionmaker):
         )
         logging.info("Created connection with database")
 
-    async def get_session(self):
+    async def get_session(self) -> AsyncIterator[AsyncSession]:
         if self._session_maker:
             async with self._session_maker() as session:
                 try:
@@ -39,7 +40,7 @@ class DatabaseSessionmaker(IDatabaseSessionmaker):
         else:
             logging.warning("Sessionmaker not initialized")
 
-    async def close(self):
+    async def close(self) -> None:
         if self._engine:
             await self._engine.dispose()
             self._engine = None

@@ -1,51 +1,37 @@
 import pytest
 from source.application.use_cases import GetUserImage
-from source.domain.value_objects import ID, Email, PasswordHash, Name
-from source.domain.entities.user import UserEntity
 from source.application.exceptions import (
     UserNotFoundError,
     UserHasNoImageError,
+    ImageReceivingError,
 )
+from tests.adapters.user_repository import FakeUserRepository
+from tests.adapters.storage import FakeStorage
+from tests.unit.utils.shared_data import make_user, subject
 
 
-@pytest.mark.asyncio
-class TestGetUserImage:
-    async def test_success(self, repository, storage_service):
-        use_case = GetUserImage(repo=repository, storage_service=storage_service)
-        existing_user = UserEntity(
-            id=ID(),
-            name=Name("testname"),
-            surname=Name("testsurname"),
-            username="testusername",
-            password_hash=PasswordHash("hash_test1234"),
-            email=Email("test@test.com"),
-            image_s3_path="avatars/uuid.png",
-        )
+async def test_only_signs_subject_key(
+    repository: FakeUserRepository, storage_service: FakeStorage
+) -> None:
+    alice = await repository.add(make_user(image_s3_path="alice-key"))
+    await repository.add(make_user("bob", "bob-key"))
+    assert "alice-key" in await GetUserImage(repository, storage_service).execute(
+        subject(alice)
+    )
+    assert storage_service.signed == ["alice-key"]
 
-        created_user = await repository.add(existing_user)
 
-        path = await use_case.execute(created_user.id.value)
-
-        assert path == "https://s3.com/avatars/uuid.png"
-
-    async def test_user_not_exists(self, repository, storage_service):
-        use_case = GetUserImage(repo=repository, storage_service=storage_service)
-
-        with pytest.raises(UserNotFoundError):
-            await use_case.execute(ID().value)
-
-    async def test_user_has_no_image(self, repository, storage_service):
-        use_case = GetUserImage(repo=repository, storage_service=storage_service)
-        existing_user = UserEntity(
-            id=ID(),
-            name=Name("testname"),
-            surname=Name("testsurname"),
-            username="testusername",
-            password_hash=PasswordHash("hash_test1234"),
-            email=Email("test@test.com"),
-        )
-
-        created_user = await repository.add(existing_user)
-
-        with pytest.raises(UserHasNoImageError):
-            await use_case.execute(created_user.id.value)
+async def test_missing_user_image_and_sign_failure(
+    repository: FakeUserRepository, storage_service: FakeStorage
+) -> None:
+    user = make_user()
+    use_case = GetUserImage(repository, storage_service)
+    with pytest.raises(UserNotFoundError):
+        await use_case.execute(subject(user))
+    await repository.add(user)
+    with pytest.raises(UserHasNoImageError):
+        await use_case.execute(subject(user))
+    alice = await repository.add(make_user("another", "key"))
+    storage_service.fail_sign = True
+    with pytest.raises(ImageReceivingError):
+        await use_case.execute(subject(alice))

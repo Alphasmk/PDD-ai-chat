@@ -107,3 +107,14 @@ pnpm-debug.log*
 ehthumbs.db
 Thumbs.db
 desktop.ini
+
+.venv/
+.uv-cache/
+dist/
+Dockerfile*
+.dockerignore
+
+.agents/
+.codex/
+.specify/
+specs/

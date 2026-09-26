@@ -2,10 +2,14 @@ import mimetypes
 import logging
 from source.application.interfaces import IStorage
 from aioboto3 import Session
-from botocore.config import Config
+from aiobotocore.config import AioConfig
 from botocore.exceptions import ClientError, BotoCoreError
 from source.domain.value_objects import ID
-from source.application.exceptions import UploadImageError, DeleteImageError
+from source.application.exceptions import (
+    UploadImageError,
+    DeleteImageError,
+    ImageReceivingError,
+)
 
 
 class Storage(IStorage):
@@ -36,16 +40,23 @@ class Storage(IStorage):
             raise UploadImageError() from e
 
     async def get_image_url(self, path: str, expires_in: int = 3600) -> str | None:
-        async with self.session.client(
-            "s3",
-            config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
-        ) as s3:
-            url = await s3.generate_presigned_url(
-                ClientMethod="get_object",
-                Params={"Bucket": self.bucket_name, "Key": path},
-                ExpiresIn=expires_in,
-            )
-            return url
+        try:
+            async with self.session.client(
+                "s3",
+                config=AioConfig(
+                    signature_version="s3v4", s3={"addressing_style": "virtual"}
+                ),
+            ) as s3:
+                url: object = await s3.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={"Bucket": self.bucket_name, "Key": path},
+                    ExpiresIn=expires_in,
+                )
+                if not isinstance(url, str):
+                    raise ImageReceivingError()
+                return url
+        except (ClientError, BotoCoreError) as error:
+            raise ImageReceivingError() from error
 
     async def delete_image(self, path: str) -> None:
         try:

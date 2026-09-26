@@ -1,92 +1,75 @@
 import pytest
-from source.domain.value_objects import ID
-from source.application.use_cases import RegisterUser
 from source.application.dto import UserCreateDTO
+from source.application.use_cases import RegisterUser
 from source.application.exceptions import (
     EmailTakenError,
     UsernameTakenError,
     PhoneNumberTaken,
 )
+from source.domain.exceptions import NameLengthError, PasswordLengthError
+from tests.adapters.user_repository import FakeUserRepository
+from tests.adapters.hasher import FakeHasher
 
 
-@pytest.mark.asyncio
-class TestRegisterUser:
-    async def test_success(self, hasher, repository):
-        use_case = RegisterUser(repo=repository, hasher=hasher)
-        user = UserCreateDTO(
-            name="testname",
-            surname="testsurname",
-            username="testusername",
-            password="test1234",
-            email="test@test.com",
-        )
-        created_user = await use_case.execute(user)
+def registration(
+    username: str = "alice",
+    email: str = "alice@example.com",
+    phone: str | None = None,
+    name: str = "Alice",
+    password: str = "Test1234",
+) -> UserCreateDTO:
+    return UserCreateDTO(
+        name=name,
+        surname="Smith",
+        username=username,
+        email=email,
+        password=password,
+        phone_number=phone,
+    )
 
-        assert created_user is not None
-        saved_user = await repository.get_by_id(ID(created_user.id))
-        assert saved_user is not None
 
-        assert saved_user.password_hash.value == "hash_test1234"
-        assert saved_user.id.value == created_user.id
+async def test_register(repository: FakeUserRepository, hasher: FakeHasher) -> None:
+    result = await RegisterUser(repository, hasher).execute(registration())
+    stored = repository.users[str(result.id)]
+    assert stored.password_hash.value == "hash_Test1234"
+    assert result.image_s3_path is None
+    assert result.email == "alice@example.com"
 
-    async def test_user_with_email_already_exists(self, hasher, repository):
-        use_case = RegisterUser(repo=repository, hasher=hasher)
-        user = UserCreateDTO(
-            name="testname",
-            surname="testsurname",
-            username="testusername",
-            password="test1234",
-            email="test@test.com",
-        )
-        await use_case.execute(user)
-        bad_user = UserCreateDTO(
-            name="test",
-            surname="test",
-            username="test",
-            password="test1234",
-            email="test@test.com",
-        )
-        with pytest.raises(EmailTakenError):
-            await use_case.execute(bad_user)
 
-    async def test_user_with_username_already_exists(self, hasher, repository):
-        use_case = RegisterUser(repo=repository, hasher=hasher)
-        user = UserCreateDTO(
-            name="testname",
-            surname="testsurname",
-            username="testusername",
-            password="test1234",
-            email="test@test.com",
-        )
-        await use_case.execute(user)
-        bad_user = UserCreateDTO(
-            name="test",
-            surname="test",
-            username="testusername",
-            password="test1234",
-            email="testemail@test.com",
-        )
-        with pytest.raises(UsernameTakenError):
-            await use_case.execute(bad_user)
+@pytest.mark.parametrize(
+    "data,error",
+    [
+        (registration(name="A"), NameLengthError),
+        (registration(password="short"), PasswordLengthError),
+    ],
+)
+async def test_invalid_registration_is_atomic(
+    repository: FakeUserRepository,
+    hasher: FakeHasher,
+    data: UserCreateDTO,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        await RegisterUser(repository, hasher).execute(data)
+    assert not repository.users
 
-    async def test_user_with_phone_number_already_exists(self, hasher, repository):
-        use_case = RegisterUser(repo=repository, hasher=hasher)
-        user = UserCreateDTO(
-            name="testname",
-            surname="testsurname",
-            username="testusername",
-            password="test1234",
-            email="test@test.com",
-            phone_number="some_number",
-        )
-        await use_case.execute(user)
-        bad_user = UserCreateDTO(
-            name="test",
-            surname="test",
-            username="test",
-            password="test1234",
-            email="testemail@test.com",
-            phone_number="some_number",
-        )
-        with pytest.raises(PhoneNumberTaken):
-            await use_case.execute(bad_user)
+
+@pytest.mark.parametrize(
+    "data,error",
+    [
+        (registration("other"), EmailTakenError),
+        (registration(email="other@example.com"), UsernameTakenError),
+        (registration("other", "other@example.com", "123"), PhoneNumberTaken),
+    ],
+)
+async def test_duplicates(
+    repository: FakeUserRepository,
+    hasher: FakeHasher,
+    data: UserCreateDTO,
+    error: type[Exception],
+) -> None:
+    use_case = RegisterUser(repository, hasher)
+    await use_case.execute(registration(phone="123"))
+    with pytest.raises(error):
+        await use_case.execute(data)
+    assert len(repository.users) == 1

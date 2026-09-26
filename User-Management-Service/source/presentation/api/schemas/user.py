@@ -1,7 +1,5 @@
 from uuid import UUID
 from pydantic import EmailStr
-from typing import Optional, Literal
-from source.domain.enums.user_role import UserRole
 from source.presentation.api.schemas.base import Base
 
 
@@ -12,12 +10,11 @@ class UserDeleteResponse(Base):
 
 
 class UserEditRequest(Base):
-    name: Optional[str] = None
-    surname: Optional[str] = None
-    username: Optional[str] = None
-    email: Optional[EmailStr] = None
-    phone_number: Optional[str] = None
-    image_s3_path: Optional[str] = None
+    name: str | None = None
+    surname: str | None = None
+    username: str | None = None
+    email: EmailStr | None = None
+    phone_number: str | None = None
 
 
 class UserEditResponse(Base):
@@ -25,24 +22,8 @@ class UserEditResponse(Base):
     surname: str
     username: str
     email: EmailStr
-    phone_number: Optional[str] = None
-    image_s3_path: Optional[str] = None
-
-
-class UserPaginationRequest(Base):
-    limit: int
-    page: int
-    filter_by_name: Optional[str] = None
-    sort_by: Optional[str] = None
-    order_by: Literal["asc", "desc"] = "asc"
-
-
-class ChangeRoleRequest(Base):
-    role: UserRole
-
-
-class MessageResponse(Base):
-    message: str
+    phone_number: str | None = None
+    image_s3_path: str | None = None
 
 
 class ImageResponse(Base):

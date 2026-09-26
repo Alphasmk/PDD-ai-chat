@@ -1,24 +1,19 @@
-"""
-Configuration classes
-"""
+"""Explicit opt-in URLs for disposable real-service checks."""
 
-from functools import lru_cache
-from tests.integration.settings.separated_configs import (
-    DatabaseConfig,
-    CacheConfig,
-    BrokerConfig,
-)
+import os
+from dataclasses import dataclass
 
 
-class Config:
-    """Main configuration class with all configuration classes"""
-
-    def __init__(self):
-        self.cache = CacheConfig()
-        self.database = DatabaseConfig()
-        self.broker = BrokerConfig()
+@dataclass(frozen=True)
+class ServiceConfig:
+    postgres_url: str | None
+    redis_url: str | None
+    broker_url: str | None
 
 
-@lru_cache
-def get_test_settings() -> Config:
-    return Config()
+def get_test_settings() -> ServiceConfig:
+    return ServiceConfig(
+        os.getenv("UMS_TEST_POSTGRES_URL"),
+        os.getenv("UMS_TEST_REDIS_URL"),
+        os.getenv("UMS_TEST_BROKER_URL"),
+    )

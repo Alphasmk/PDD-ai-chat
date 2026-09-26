@@ -1,9 +1,7 @@
-from typing import Optional
-from pydantic import EmailStr
 from datetime import datetime
-from source.domain.enums.user_role import UserRole
-from source.presentation.api.schemas.base import Base
 from uuid import UUID
+from pydantic import EmailStr
+from source.presentation.api.schemas.base import Base
 
 
 class UserResponse(Base):
@@ -12,37 +10,25 @@ class UserResponse(Base):
     surname: str
     username: str
     email: EmailStr
-    phone_number: Optional[str] = None
-    role: UserRole
-    is_blocked: bool
-    image_s3_path: Optional[str] = None
-    group_id: Optional[UUID] = None
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    phone_number: str | None = None
+    image_s3_path: str | None = None
+    updated_at: datetime | None = None
 
 
 class UserSignupRequest(Base):
-    """User registration schema"""
-
     name: str
     surname: str
     username: str
     password: str
     email: EmailStr
-    phone_number: Optional[str] = None
+    phone_number: str | None = None
 
 
 class TokenResponse(Base):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-
-
-class DataFromTokenResponse(Base):
-    user_id: UUID
-    email: str
-    role: str
-    group_id: Optional[UUID] = None
 
 
 class ResetPasswordRequest(Base):

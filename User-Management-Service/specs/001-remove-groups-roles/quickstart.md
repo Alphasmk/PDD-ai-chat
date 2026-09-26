@@ -10,6 +10,13 @@ not migrate or delete an existing database.
 - Provide a test environment file with PostgreSQL, Redis, RabbitMQ, JWT, and storage settings.
 - Use a disposable compose project and temporary data. Do not reuse production volumes.
 
+Copy `.env.test.example` to `.env.test`. Host port defaults are PostgreSQL 5434,
+Redis 6380, RabbitMQ 5673 and management 15673; override `TEST_POSTGRES_PORT`,
+`TEST_REDIS_PORT`, `TEST_BROKER_PORT`, `TEST_BROKER_MANAGEMENT_PORT` for another run.
+Set `UMS_TEST_POSTGRES_URL`, `UMS_TEST_REDIS_URL`, `UMS_TEST_BROKER_URL` to matching
+localhost URLs when running the real-service tests. Every compose project has
+temporary PostgreSQL, Redis and RabbitMQ data and no fixed container names.
+
 ## Static and unit checks
 
 From the repository root:
@@ -39,9 +46,16 @@ Start only disposable test services using the project's test compose definition 
 equivalent), then run:
 
 ```powershell
-docker compose -p ums-users-only -f docker-compose.test.yaml up -d
+docker compose --env-file .env.test -p ums-users-only -f docker-compose.test.yaml up -d --wait
+$env:UMS_TEST_POSTGRES_URL = "postgresql+asyncpg://postgres:disposable@localhost:5434/ums_test"
+$env:UMS_TEST_REDIS_URL = "redis://:disposable@localhost:6380/0"
+$env:UMS_TEST_BROKER_URL = "amqp://test:disposable@localhost:5673/"
 uv run pytest tests/integration
-docker compose -p ums-users-only -f docker-compose.test.yaml down -v
+docker compose --env-file .env.test -p ums-users-only -f docker-compose.test.yaml --profile startup up -d --build --wait
+Invoke-RestMethod http://localhost:8001/healthcheck
+$env:UMS_TEST_APP_URL = "http://localhost:8001"
+uv run pytest tests/integration/settings/startup_test.py
+docker compose --env-file .env.test -p ums-users-only -f docker-compose.test.yaml --profile startup down -v
 ```
 
 If Docker is unavailable, the same suite can run against equivalent local services configured
@@ -83,3 +97,18 @@ through the test environment. The implementation must document the actual servic
 Record the actual Ruff, strict mypy, pytest and acceptance results. A failed or unexecuted
 check is not a pass. Typing/DDD exceptions require a maintainer decision with reason, scope,
 owner and exit condition, per constitution 3.0.0. All three stories are required for release.
+
+Without UMS_TEST_* URLs, HTTP tests use a fresh migrated SQLite database with
+storage/cache/publisher fakes; two real-service checks are explicitly skipped.
+With UMS_TEST_POSTGRES_URL every HTTP/schema test uses its own random PostgreSQL
+schema. Only that schema is removed afterwards. Real Redis tests remove only their
+subject-specific keys. RabbitMQ tests use the disposable broker and remove the
+test and password-reset queues.
+
+The startup compose profile runs the production Dockerfile and scripts/entry.sh
+against the untouched default test schema, on port TEST_APP_PORT (default 8001).
+Its test credentials match .env.test.example. Before signup verify zero users:
+docker compose --env-file .env.test -p ums-users-only -f docker-compose.test.yaml exec -T postgres_test psql -U postgres -d ums_test -c "select count(*) from users;"
+Then register through POST /api/v1/auth/signup. This check is independent of the
+random schemas used by pytest. All data disappears when the disposable project
+is taken down.
