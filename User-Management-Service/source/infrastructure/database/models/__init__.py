@@ -1,7 +1,5 @@
-"""Model classes for the application"""
+from .base import Base
+from .roles import Role
+from .users import User
 
-from source.infrastructure.database.models.base import Base
-from source.infrastructure.database.models.users import User
-from source.infrastructure.database.models.groups import Group
-
-__all__ = ["Base", "User", "Group"]
+__all__ = ["Base", "User", "Role"]

@@ -4,11 +4,12 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from aio_pika import Message, DeliveryMode
 
-from source.application.interfaces import IMessagePublisher, IBrokerHandler
+from source.application.interfaces import IMessagePublisher
+from source.infrastructure.interfaces import IBrokerHandler
 
 
 class MessagePublisher(IMessagePublisher):
-    def __init__(self, handler: IBrokerHandler):
+    def __init__(self, handler: IBrokerHandler) -> None:
         self.handler = handler
 
     async def publish_message(

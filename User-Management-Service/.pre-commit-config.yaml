@@ -16,8 +16,11 @@ repos:
       - id: ruff-check
         args: [ --fix ]
       - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic, pydantic-settings, sqlalchemy, types-redis]
+        name: strict mypy
+        entry: uv run mypy source tests scripts
+        language: system
+        types: [python]
+        pass_filenames: false

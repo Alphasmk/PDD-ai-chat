@@ -1,4 +1,47 @@
 from source.application.exceptions.base import ApplicationException
+from source.domain.exceptions.user_access_exceptions import (
+    Forbidden,
+    UserBlocked,
+    ProtectedAccount,
+    InvalidTargetState,
+)
+
+
+class ForbiddenError(ApplicationException):
+    def __init__(self) -> None:
+        super().__init__("forbidden")
+
+
+class UserBlockedError(ApplicationException):
+    def __init__(self) -> None:
+        super().__init__("user_blocked")
+
+
+class ProtectedAccountError(ApplicationException):
+    def __init__(self) -> None:
+        super().__init__("protected_account")
+
+
+class InvalidTargetStateError(ApplicationException):
+    def __init__(self) -> None:
+        super().__init__("invalid_target_state")
+
+
+class ServiceUnavailableError(ApplicationException):
+    def __init__(self) -> None:
+        super().__init__("service_unavailable")
+
+
+def access_error(
+    error: Forbidden | UserBlocked | ProtectedAccount | InvalidTargetState,
+) -> ApplicationException:
+    if isinstance(error, Forbidden):
+        return ForbiddenError()
+    if isinstance(error, UserBlocked):
+        return UserBlockedError()
+    if isinstance(error, ProtectedAccount):
+        return ProtectedAccountError()
+    return InvalidTargetStateError()
 
 
 class UsernameTakenError(ApplicationException):
@@ -25,67 +68,7 @@ class UserNotFoundError(ApplicationException):
         super().__init__(message)
 
 
-class ActionNotAllowedError(ApplicationException):
-    def __init__(self, err) -> None:
-        message = f"Action not allowed: {err}"
-        super().__init__(message)
-
-
-class UserEditNotAllowedError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot edit this user"
-        super().__init__(message)
-
-
-class UserGetInfoNotAllowed(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot get info about users"
-        super().__init__(message)
-
-
-class ModeratorGetInfoNotAllowed(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot receive information about users not from your group"
-        super().__init__(message)
-
-
 class InvalidCredentialsError(ApplicationException):
     def __init__(self) -> None:
         message = "Incorrect username or password"
-        super().__init__(message)
-
-
-class CannotChangeImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot change custom images other than your own"
-        super().__init__(message)
-
-
-class UploadImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "Error when uploading an image"
-        super().__init__(message)
-
-
-class DeleteImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "Error when deleting an image"
-        super().__init__(message)
-
-
-class UserHasNoImageError(ApplicationException):
-    def __init__(self, username: str) -> None:
-        message = f"User {username} has no image"
-        super().__init__(message)
-
-
-class ImageReceivingError(ApplicationException):
-    def __init__(self) -> None:
-        message = "Error loading image"
-        super().__init__(message)
-
-
-class CannotDeleteImageError(ApplicationException):
-    def __init__(self) -> None:
-        message = "You cannot delete custom images other than your own"
         super().__init__(message)

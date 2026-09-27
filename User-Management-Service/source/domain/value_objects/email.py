@@ -1,6 +1,5 @@
 """Email dataclass definition"""
 
-# mypy: ignore-errors
 import re
 from dataclasses import dataclass
 from typing import ClassVar
@@ -27,5 +26,5 @@ class Email:
         object.__setattr__(instance, "value", email)
         return instance
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate_email(self.value)

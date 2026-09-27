@@ -1,22 +1,51 @@
 import pytest
 from httpx import AsyncClient
-from fastapi import status
+from source.infrastructure.jwt import TokenProvider
+from tests.integration.conftest import account, response_data
 
 
-@pytest.mark.asyncio(loop_scope="session")
-class TestGetCurrentUser:
-    async def test_success(self, client: AsyncClient, auth_headers):
+async def test_reads_only_own_profile(client: AsyncClient) -> None:
+    alice, bob = await account(client), await account(client, "bob")
+    response = await client.get(
+        "/api/v1/users/me", headers=alice.headers, params={"user_id": bob.id}
+    )
+    assert response.status_code == 200
+    assert response_data(response)["id"] == alice.id
+    assert set(response_data(response)) == {
+        "id",
+        "name",
+        "surname",
+        "username",
+        "email",
+        "phone_number",
+        "created_at",
+        "updated_at",
+        "role",
+        "is_blocked",
+        "is_superadmin",
+    }
 
-        user_headers = await auth_headers()
 
-        edit_payload = {"name": "Updatedname", "surname": "Updatedsurname"}
+@pytest.mark.parametrize("header", [None, "Bearer invalid"])
+async def test_missing_invalid_auth(client: AsyncClient, header: str | None) -> None:
+    headers = {"Authorization": header} if header else {}
+    assert (await client.get("/api/v1/users/me", headers=headers)).status_code == 401
 
-        response = await client.patch(
-            "/api/v1/users/me", json=edit_payload, headers=user_headers
+
+async def test_expired_and_deleted_subject(client: AsyncClient) -> None:
+    alice = await account(client)
+    expired = TokenProvider("isolated-http-test-secret-32-characters", "HS256", -1, 7)
+    token = await expired.create_access_token(
+        {"sub": alice.id, "email": "alice@example.com"}
+    )
+    assert (
+        await client.get(
+            "/api/v1/users/me", headers={"Authorization": f"Bearer {token}"}
         )
-
-        assert response.status_code == status.HTTP_200_OK
-
-        updated_data = response.json()
-        assert updated_data["name"] == "Updatedname"
-        assert updated_data["surname"] == "Updatedsurname"
+    ).status_code == 401
+    assert (
+        await client.delete("/api/v1/users/me", headers=alice.headers)
+    ).status_code == 200
+    assert (
+        await client.get("/api/v1/users/me", headers=alice.headers)
+    ).status_code == 404

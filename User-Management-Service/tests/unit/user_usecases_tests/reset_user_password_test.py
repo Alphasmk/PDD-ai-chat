@@ -1,26 +1,22 @@
 import pytest
 from source.application.use_cases import ResetUserPassword
-from source.domain.value_objects import ID, Email, PasswordHash, Name
-from source.domain.entities.user import UserEntity
+from tests.adapters.broker_service import FakeMessageService
 
 
-@pytest.mark.asyncio
-class TestResetUserPassword:
-    async def test_success(self, message_publisher, repository):
-        use_case = ResetUserPassword(broker_service=message_publisher)
-        existing_user = UserEntity(
-            id=ID(),
-            name=Name("testname"),
-            surname=Name("testsurname"),
-            username="testusername",
-            password_hash=PasswordHash("hash_test1234"),
-            email=Email("test@test.com"),
+async def test_publishes_existing_request(
+    message_publisher: FakeMessageService,
+) -> None:
+    await ResetUserPassword(message_publisher).execute(
+        "alice@example.com", "link", "queue", "dlq"
+    )
+    assert message_publisher.messages == [("alice@example.com", "link", "queue", "dlq")]
+
+
+async def test_publisher_failure_propagates(
+    message_publisher: FakeMessageService,
+) -> None:
+    message_publisher.fail = True
+    with pytest.raises(RuntimeError, match="publisher unavailable"):
+        await ResetUserPassword(message_publisher).execute(
+            "alice@example.com", "link", "queue", "dlq"
         )
-
-        created_user = await repository.add(existing_user)
-
-        await use_case.execute(created_user.email.value, "Test message", "Test", "Test")
-
-        assert created_user.email.value in [
-            message["subject"] for message in await message_publisher.get_messages()
-        ]

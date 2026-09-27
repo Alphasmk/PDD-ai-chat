@@ -30,5 +30,5 @@ class Name:
         object.__setattr__(instance, "value", name)
         return instance
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate_name(self.value)
