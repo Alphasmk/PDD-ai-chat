@@ -19,6 +19,7 @@ async def test_patch_ignores_foreign_targets_keys_and_legacy(
             "role": "admin",
             "group_id": "legacy",
             "is_blocked": True,
+            "is_superadmin": True,
         },
     )
     assert response.status_code == 200
@@ -29,9 +30,16 @@ async def test_patch_ignores_foreign_targets_keys_and_legacy(
         "username",
         "email",
         "phone_number",
-        "image_s3_path",
+        "role",
+        "is_blocked",
+        "is_superadmin",
     }
-    assert data["name"] == "Jane" and data["image_s3_path"] is None
+    assert data["name"] == "Jane"
+    assert (
+        data["role"] == "user"
+        and data["is_blocked"] is False
+        and data["is_superadmin"] is False
+    )
     assert (
         response_data(await client.get("/api/v1/users/me", headers=bob.headers))
         == before
@@ -39,6 +47,23 @@ async def test_patch_ignores_foreign_targets_keys_and_legacy(
     assert (
         await client.patch("/api/v1/users/me", headers=alice.headers, json={})
     ).status_code == 200
+
+
+async def test_only_legacy_fields_do_not_change_profile(client: AsyncClient) -> None:
+    alice = await account(client)
+    before = response_data(await client.get("/api/v1/users/me", headers=alice.headers))
+    response = await client.patch(
+        "/api/v1/users/me",
+        headers=alice.headers,
+        json={"image_s3_path": "legacy", "image_url": "legacy", "id": "foreign"},
+    )
+    assert response.status_code == 200
+    assert "image_s3_path" not in response_data(response)
+    assert "image_url" not in response_data(response)
+    assert (
+        response_data(await client.get("/api/v1/users/me", headers=alice.headers))
+        == before
+    )
 
 
 @pytest.mark.parametrize(

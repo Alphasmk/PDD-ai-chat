@@ -4,10 +4,6 @@ from .user_exceptions import (
     PhoneNumberTaken,
     UserNotFoundError,
     InvalidCredentialsError,
-    ImageReceivingError,
-    UploadImageError,
-    UserHasNoImageError,
-    DeleteImageError,
 )
 from .token_exceptions import (
     TokenExpiredError,
@@ -22,10 +18,6 @@ __all__ = [
     "PhoneNumberTaken",
     "UserNotFoundError",
     "InvalidCredentialsError",
-    "ImageReceivingError",
-    "UploadImageError",
-    "UserHasNoImageError",
-    "DeleteImageError",
     "TokenExpiredError",
     "TokenRevokedError",
     "InvalidTokenError",

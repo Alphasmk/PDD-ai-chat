@@ -3,13 +3,15 @@ import pytest
 from httpx import AsyncClient
 from source.main import app
 from tests.integration.conftest import account, response_data
-from tests.adapters.storage import FakeStorage
 
 
+@pytest.mark.parametrize("authorized", [False, True])
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("GET", "/users"),
+        ("POST", "/users/me/image"),
+        ("GET", "/users/me/image"),
+        ("DELETE", "/users/me/image"),
         ("GET", "/users/{user}"),
         ("PATCH", "/users/{user}"),
         ("DELETE", "/users/{user}"),
@@ -18,10 +20,11 @@ from tests.adapters.storage import FakeStorage
         ("DELETE", "/users/{user}/image"),
         ("POST", "/users/change_role/{user}"),
         ("POST", "/users/change_block_state/{user}"),
+        ("POST", "/users/{user}/unblock"),
     ],
 )
 async def test_removed_operations_no_disclosure_mutation(
-    client: AsyncClient, storage: FakeStorage, method: str, path: str
+    client: AsyncClient, method: str, path: str, authorized: bool
 ) -> None:
     alice, bob = await account(client), await account(client, "bob")
     before_a = response_data(
@@ -31,7 +34,7 @@ async def test_removed_operations_no_disclosure_mutation(
     response = await client.request(
         method,
         "/api/v1" + path.format(user=bob.id),
-        headers=alice.headers,
+        headers=alice.headers if authorized else {},
         json={"name": "Other", "role": "admin"},
     )
     assert response.status_code == 404
@@ -43,7 +46,6 @@ async def test_removed_operations_no_disclosure_mutation(
         response_data(await client.get("/api/v1/users/me", headers=bob.headers))
         == before_b
     )
-    assert not storage.objects and not storage.signed and not storage.deleted
 
 
 def test_exact_openapi_surface_and_input_fields() -> None:
@@ -59,14 +61,22 @@ def test_exact_openapi_surface_and_input_fields() -> None:
         ("/api/v1/users/me", "get"),
         ("/api/v1/users/me", "patch"),
         ("/api/v1/users/me", "delete"),
-        ("/api/v1/users/me/image", "get"),
-        ("/api/v1/users/me/image", "post"),
-        ("/api/v1/users/me/image", "delete"),
         ("/healthcheck", "get"),
+        ("/api/v1/roles", "get"),
+        ("/api/v1/users", "get"),
+        ("/api/v1/users/{user_id}/role", "patch"),
+        ("/api/v1/users/{user_id}/block", "post"),
     }
     assert actual == expected
     document = json.dumps(schema)
-    for removed in ("group_id", "is_blocked", "UserRole", "ChangeRole", "Pagination"):
+    for removed in (
+        "group_id",
+        "Pagination",
+        "ImageResponse",
+        "ImageUploadResponse",
+        "image_s3_path",
+        "image_url",
+    ):
         assert removed not in document
     from source.presentation.api.schemas.user import UserEditRequest
     from source.presentation.api.schemas.auth import UserSignupRequest

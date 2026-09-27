@@ -3,12 +3,14 @@ from httpx import AsyncClient
 from tests.integration.conftest import signup_payload, response_data
 
 
-async def test_signup_shape_and_ignored_fields(client: AsyncClient) -> None:
+@pytest.mark.parametrize("role", ["admin", "superadmin"])
+async def test_signup_shape_and_ignored_fields(client: AsyncClient, role: str) -> None:
     payload = {
         **signup_payload(),
-        "role": "admin",
+        "role": role,
         "group_id": "old",
         "is_blocked": True,
+        "is_superadmin": True,
         "image_s3_path": "foreign",
     }
     response = await client.post("/api/v1/auth/signup", json=payload)
@@ -21,11 +23,18 @@ async def test_signup_shape_and_ignored_fields(client: AsyncClient) -> None:
         "username",
         "email",
         "phone_number",
-        "image_s3_path",
         "created_at",
         "updated_at",
+        "role",
+        "is_blocked",
+        "is_superadmin",
     }
-    assert data["image_s3_path"] is None and data["updated_at"] is None
+    assert data["updated_at"] is None
+    assert (
+        data["role"] == "user"
+        and data["is_blocked"] is False
+        and data["is_superadmin"] is False
+    )
 
 
 @pytest.mark.parametrize(

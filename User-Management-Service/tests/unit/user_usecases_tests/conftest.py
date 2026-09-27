@@ -3,7 +3,6 @@ from tests.adapters.user_repository import FakeUserRepository
 from tests.adapters.hasher import FakeHasher
 from tests.adapters.token_provider import FakeTokenProvider
 from tests.adapters.cache_service import FakeRedisTokenBlacklist
-from tests.adapters.storage import FakeStorage
 from tests.adapters.broker_service import FakeMessageService
 
 
@@ -25,11 +24,6 @@ def token_service() -> FakeTokenProvider:
 @pytest.fixture
 def cache_service() -> FakeRedisTokenBlacklist:
     return FakeRedisTokenBlacklist()
-
-
-@pytest.fixture
-def storage_service() -> FakeStorage:
-    return FakeStorage()
 
 
 @pytest.fixture

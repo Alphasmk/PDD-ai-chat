@@ -32,8 +32,9 @@ async def test_register(repository: FakeUserRepository, hasher: FakeHasher) -> N
     result = await RegisterUser(repository, hasher).execute(registration())
     stored = repository.users[str(result.id)]
     assert stored.password_hash.value == "hash_Test1234"
-    assert result.image_s3_path is None
+    assert not hasattr(result, "image_s3_path")
     assert result.email == "alice@example.com"
+    assert result.role.value == "user" and not result.is_blocked
 
 
 @pytest.mark.parametrize(

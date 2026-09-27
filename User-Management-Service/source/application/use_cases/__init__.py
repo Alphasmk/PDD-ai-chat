@@ -7,9 +7,6 @@ from .user_use_cases import (
     GetCurrentUserFromToken,
     ResetTokens,
     ResetUserPassword,
-    SetUserImage,
-    GetUserImage,
-    DeleteUserImage,
 )
 
 __all__ = [
@@ -21,7 +18,4 @@ __all__ = [
     "GetCurrentUserFromToken",
     "ResetTokens",
     "ResetUserPassword",
-    "SetUserImage",
-    "GetUserImage",
-    "DeleteUserImage",
 ]

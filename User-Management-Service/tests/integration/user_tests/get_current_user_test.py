@@ -18,9 +18,11 @@ async def test_reads_only_own_profile(client: AsyncClient) -> None:
         "username",
         "email",
         "phone_number",
-        "image_s3_path",
         "created_at",
         "updated_at",
+        "role",
+        "is_blocked",
+        "is_superadmin",
     }
 
 

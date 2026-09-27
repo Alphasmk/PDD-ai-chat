@@ -4,8 +4,8 @@ from source.application.interfaces import (
     ITokenProvider,
     ITokenBlacklist,
     IMessagePublisher,
-    IStorage,
 )
+from source.application.interfaces.unit_of_work import UnitOfWorkFactory
 from source.domain.interfaces import IPasswordHasher
 from source.application.use_cases import (
     RegisterUser,
@@ -14,9 +14,6 @@ from source.application.use_cases import (
     DeleteUser,
     ResetTokens,
     ResetUserPassword,
-    GetUserImage,
-    SetUserImage,
-    DeleteUserImage,
 )
 from source.presentation.api.dependencies.adapters import (
     get_user_repository,
@@ -24,7 +21,7 @@ from source.presentation.api.dependencies.adapters import (
     get_token_service,
     get_cache_service,
     get_message_broker_service,
-    get_storage,
+    get_unit_of_work_factory,
 )
 
 
@@ -35,9 +32,9 @@ async def get_edit_user_use_case(
 
 
 async def get_delete_user_usecase(
-    repo: IUserRepository = Depends(get_user_repository),
+    factory: UnitOfWorkFactory = Depends(get_unit_of_work_factory),
 ) -> DeleteUser:
-    return DeleteUser(repo)
+    return DeleteUser(factory)
 
 
 async def get_register_user_use_case(
@@ -67,24 +64,3 @@ async def get_reset_user_password_use_case(
     service: IMessagePublisher = Depends(get_message_broker_service),
 ) -> ResetUserPassword:
     return ResetUserPassword(service)
-
-
-async def get_set_user_image_use_case(
-    repo: IUserRepository = Depends(get_user_repository),
-    service: IStorage = Depends(get_storage),
-) -> SetUserImage:
-    return SetUserImage(repo, service)
-
-
-async def get_get_user_image_use_case(
-    repo: IUserRepository = Depends(get_user_repository),
-    service: IStorage = Depends(get_storage),
-) -> GetUserImage:
-    return GetUserImage(repo, service)
-
-
-async def get_delete_user_image_use_case(
-    repo: IUserRepository = Depends(get_user_repository),
-    service: IStorage = Depends(get_storage),
-) -> DeleteUserImage:
-    return DeleteUserImage(repo, service)

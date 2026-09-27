@@ -11,11 +11,14 @@ from source.infrastructure.database.models import User
 from source.infrastructure.database.user_repository import UserRepository
 from source.domain.value_objects import ID
 from tests.integration.conftest import account
+import pytest
+from sqlalchemy.exc import IntegrityError
+from uuid import uuid4
 
 
 def assert_schema(connection: Connection) -> None:
     inspector = inspect(connection)
-    assert set(inspector.get_table_names()) == {"users", "alembic_version"}
+    assert set(inspector.get_table_names()) == {"users", "roles", "alembic_version"}
     columns = {column["name"]: column for column in inspector.get_columns("users")}
     assert set(columns) == {
         "id",
@@ -25,9 +28,11 @@ def assert_schema(connection: Connection) -> None:
         "password_hash",
         "email",
         "phone_number",
-        "image_s3_path",
         "created_at",
         "updated_at",
+        "role_id",
+        "is_blocked",
+        "is_superadmin",
     }
     for name in (
         "id",
@@ -37,12 +42,15 @@ def assert_schema(connection: Connection) -> None:
         "password_hash",
         "email",
         "created_at",
+        "role_id",
+        "is_blocked",
+        "is_superadmin",
     ):
         assert columns[name]["nullable"] is False
-    for name in ("phone_number", "image_s3_path", "updated_at"):
+    for name in ("phone_number", "updated_at"):
         assert columns[name]["nullable"] is True
     assert inspector.get_pk_constraint("users")["constrained_columns"] == ["id"]
-    assert not inspector.get_foreign_keys("users")
+    assert inspector.get_foreign_keys("users")[0]["referred_table"] == "roles"
     unique = {
         tuple(item["column_names"])
         for item in inspector.get_unique_constraints("users")
@@ -70,7 +78,7 @@ async def test_fresh_schema_zero_users_and_first_signup(
         restored = await UserRepository(db).get_by_id(ID(UUID(user.id)))
         assert restored is not None
         assert restored.created_at.tzinfo == timezone.utc
-        assert restored.updated_at is None and restored.image_s3_path is None
+        assert restored.updated_at is None
         assert (await UserRepository(db).get_by_username("alice")) == restored
         await client.patch(
             "/api/v1/users/me", headers=user.headers, json={"name": "Jane"}
@@ -89,8 +97,55 @@ async def test_fresh_schema_zero_users_and_first_signup(
 def test_single_baseline_no_bootstrap() -> None:
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
     revisions = list(scripts.walk_revisions())
-    assert len(revisions) == 1 and revisions[0].down_revision is None
+    assert len(revisions) == 2 and revisions[-1].down_revision is None
+    assert revisions[0].down_revision == "users_roles_20260927"
+    assert scripts.get_heads() == ["role_catalog_20260927"]
     entry = Path("scripts/entry.sh").read_text()
-    assert "alembic upgrade head" in entry and 'exec "$@"' in entry
-    assert "super" not in entry.lower()
-    assert "super" not in Path(".env.example").read_text().lower()
+    assert "python -m scripts.initialize_service" in entry and 'exec "$@"' in entry
+
+
+@pytest.mark.parametrize(
+    "role_id, blocked, protected",
+    [(3, False, False), (2, True, False), (1, False, True), (2, True, True)],
+)
+async def test_invalid_storage_state(
+    engine: AsyncEngine, role_id: int, blocked: bool, protected: bool
+) -> None:
+    async with AsyncSession(engine) as session:
+        session.add(
+            User(
+                id=uuid4(),
+                name="Alice",
+                surname="Smith",
+                username="invalid",
+                email="invalid@example.com",
+                password_hash="test",
+                role_id=role_id,
+                is_superadmin=protected,
+                is_blocked=blocked,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.flush()
+        await session.rollback()
+
+
+async def test_single_superadmin_constraint(engine: AsyncEngine) -> None:
+    async with AsyncSession(engine) as session:
+        for index in range(2):
+            session.add(
+                User(
+                    id=uuid4(),
+                    name="Alice",
+                    surname="Smith",
+                    username=f"owner{index}",
+                    email=f"owner{index}@example.com",
+                    password_hash="test",
+                    role_id=2,
+                    is_superadmin=True,
+                    is_blocked=False,
+                )
+            )
+        with pytest.raises(IntegrityError):
+            await session.flush()
+        await session.rollback()

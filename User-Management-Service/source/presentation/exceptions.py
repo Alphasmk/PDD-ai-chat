@@ -18,13 +18,21 @@ from source.application.exceptions import (
     InvalidTokenError,
     MissingTokenError,
     TokenRevokedError,
-    UploadImageError,
-    UserHasNoImageError,
-    ImageReceivingError,
-    DeleteImageError,
+)
+from source.application.exceptions.user_exceptions import (
+    ForbiddenError,
+    UserBlockedError,
+    ProtectedAccountError,
+    InvalidTargetStateError,
+    ServiceUnavailableError,
 )
 
 GENERAL_ERRORS = {
+    ForbiddenError: 403,
+    UserBlockedError: 403,
+    ProtectedAccountError: 409,
+    InvalidTargetStateError: 409,
+    ServiceUnavailableError: 503,
     UserNotFoundError: status.HTTP_404_NOT_FOUND,
     PasswordPatternError: status.HTTP_400_BAD_REQUEST,
     PasswordLengthError: status.HTTP_400_BAD_REQUEST,
@@ -42,18 +50,11 @@ AUTH_ERRORS = {
     MissingTokenError: status.HTTP_401_UNAUTHORIZED,
     TokenRevokedError: status.HTTP_401_UNAUTHORIZED,
 }
-USER_ACTIONS_ERRORS = {
-    UploadImageError: status.HTTP_400_BAD_REQUEST,
-    DeleteImageError: status.HTTP_400_BAD_REQUEST,
-    UserHasNoImageError: status.HTTP_404_NOT_FOUND,
-    ImageReceivingError: status.HTTP_400_BAD_REQUEST,
-}
 AUTH_ERROR_MAP = AUTH_ERRORS | GENERAL_ERRORS
 USERS_ME_ERROR_MAP = AUTH_ERROR_MAP
-USER_ACTIONS_MAP = USER_ACTIONS_ERRORS | AUTH_ERROR_MAP
 
 
-ERROR_STATUS: dict[type[Exception], int] = USER_ACTIONS_MAP
+ERROR_STATUS: dict[type[Exception], int] = AUTH_ERROR_MAP
 
 
 async def application_error_handler(

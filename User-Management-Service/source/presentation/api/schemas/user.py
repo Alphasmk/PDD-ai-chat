@@ -1,6 +1,7 @@
 from uuid import UUID
 from pydantic import EmailStr
 from source.presentation.api.schemas.base import Base
+from source.domain.value_objects.user_role import UserRole
 
 
 class UserDeleteResponse(Base):
@@ -23,12 +24,6 @@ class UserEditResponse(Base):
     username: str
     email: EmailStr
     phone_number: str | None = None
-    image_s3_path: str | None = None
-
-
-class ImageResponse(Base):
-    image_url: str
-
-
-class ImageUploadResponse(Base):
-    image_s3_path: str
+    role: UserRole
+    is_blocked: bool
+    is_superadmin: bool

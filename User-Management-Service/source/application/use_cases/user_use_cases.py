@@ -1,12 +1,19 @@
 from dataclasses import replace
 from uuid import UUID
+from source.domain.policies.user_access import require_active
+from source.domain.exceptions.user_access_exceptions import (
+    UserBlocked,
+    ProtectedAccount,
+)
+from source.application.exceptions.user_exceptions import access_error
+from source.application.interfaces.unit_of_work import UnitOfWorkFactory
+from source.domain.value_objects.user_role import UserRole
 from source.application.use_cases.base import UseCaseBase
 from source.application.interfaces import (
     ITokenProvider,
     ITokenBlacklist,
     IUserRepository,
     IMessagePublisher,
-    IStorage,
 )
 from source.application.dto import (
     UserCreateDTO,
@@ -24,9 +31,6 @@ from source.application.exceptions import (
     InvalidTokenError,
     MissingTokenError,
     TokenRevokedError,
-    UploadImageError,
-    UserHasNoImageError,
-    ImageReceivingError,
 )
 
 
@@ -44,7 +48,15 @@ async def require_user(repo: IUserRepository, subject: DataFromTokenDTO) -> User
     user = await repo.get_by_id(ID(subject.user_id))
     if user is None:
         raise UserNotFoundError()
+    ensure_active(user)
     return user
+
+
+def ensure_active(user: User) -> None:
+    try:
+        require_active(user)
+    except UserBlocked as error:
+        raise access_error(error) from error
 
 
 async def issue_tokens(provider: ITokenProvider, user: User) -> TokenDTO:
@@ -71,6 +83,8 @@ class RegisterUser(UseCaseBase):
             password_hash=password,
             email=email,
             phone_number=data.phone_number,
+            role=UserRole.USER,
+            is_blocked=False,
         )
         return self._to_user_read_dto(await self.repo.add(user))
 
@@ -111,13 +125,22 @@ class UpdateUser(UseCaseBase):
 
 
 class DeleteUser(UseCaseBase):
-    def __init__(self, repo: IUserRepository) -> None:
-        self.repo = repo
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self.uow_factory = uow_factory
 
     async def execute(self, current_user: DataFromTokenDTO) -> UserReadDTO:
-        user = await require_user(self.repo, current_user)
-        await self.repo.delete(user)
-        return self._to_user_read_dto(user)
+        async with self.uow_factory() as uow:
+            user = await uow.repository.get_for_update(ID(current_user.user_id))
+            if user is None:
+                raise UserNotFoundError()
+            ensure_active(user)
+            try:
+                user.ensure_deletable()
+            except ProtectedAccount as error:
+                raise access_error(error) from error
+            await uow.repository.delete(user)
+            await uow.commit()
+            return self._to_user_read_dto(user)
 
 
 class LoginUser(UseCaseBase):
@@ -135,6 +158,7 @@ class LoginUser(UseCaseBase):
             password, user.password_hash.value
         ):
             raise InvalidCredentialsError()
+        ensure_active(user)
         return await issue_tokens(self.token_service, user)
 
 
@@ -150,6 +174,7 @@ class GetCurrentUserFromToken:
         user = await self.repo.get_by_id(ID(subject))
         if user is None:
             raise UserNotFoundError()
+        ensure_active(user)
         return DataFromTokenDTO(user_id=user.id.value, email=user.email.value)
 
 
@@ -192,6 +217,7 @@ class ResetTokens:
         user = await self.repo.get_by_id(ID(subject))
         if user is None:
             raise UserNotFoundError()
+        ensure_active(user)
         if await self.cache_service.is_blacklisted(str(subject), refresh_token):
             raise TokenRevokedError()
         tokens = await issue_tokens(self.token_service, user)
@@ -212,52 +238,3 @@ class ResetUserPassword:
             queue_name=queue_name,
             dead_letter_queue_name=dlq_name,
         )
-
-
-class SetUserImage:
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo, self.storage_service = repo, storage_service
-
-    async def execute(
-        self, image: bytes, image_extension: str, current_user: DataFromTokenDTO
-    ) -> str:
-        user = await require_user(self.repo, current_user)
-        path = await self.storage_service.upload_image(image, image_extension)
-        if not path:
-            raise UploadImageError()
-        saved = await self.repo.update(replace(user, image_s3_path=path))
-        if saved is None:
-            raise UserNotFoundError()
-        if user.image_s3_path:
-            await self.storage_service.delete_image(user.image_s3_path)
-        return path
-
-
-class GetUserImage:
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo, self.storage_service = repo, storage_service
-
-    async def execute(self, current_user: DataFromTokenDTO) -> str:
-        user = await require_user(self.repo, current_user)
-        if not user.image_s3_path:
-            raise UserHasNoImageError(user.username)
-        url = await self.storage_service.get_image_url(
-            user.image_s3_path, expires_in=3600
-        )
-        if not url:
-            raise ImageReceivingError()
-        return url
-
-
-class DeleteUserImage:
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo, self.storage_service = repo, storage_service
-
-    async def execute(self, current_user: DataFromTokenDTO) -> None:
-        user = await require_user(self.repo, current_user)
-        if not user.image_s3_path:
-            raise UserHasNoImageError(user.username)
-        saved = await self.repo.update(replace(user, image_s3_path=None))
-        if saved is None:
-            raise UserNotFoundError()
-        await self.storage_service.delete_image(user.image_s3_path)

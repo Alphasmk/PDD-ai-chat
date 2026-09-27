@@ -6,16 +6,17 @@ from source.infrastructure.interfaces import (
     ICacheSessionmaker,
 )
 from fastapi import Depends, Request
-from aioboto3 import Session
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from source.application.interfaces.unit_of_work import UnitOfWorkFactory
+from source.infrastructure.database.session import UserUnitOfWork
+from source.application.interfaces.roles import IRoleRepository
+from source.infrastructure.database.role_repository import RoleRepository
 from source.application.interfaces import (
     IUserRepository,
     ITokenProvider,
     ITokenBlacklist,
     IMessagePublisher,
-    IStorage,
 )
-from source.infrastructure.storage.session import get_aws_session
 from source.domain.interfaces import IPasswordHasher
 from source.infrastructure.database import get_database
 from source.infrastructure.cache import get_cache_database, RedisTokenBlacklist
@@ -23,7 +24,6 @@ from source.infrastructure.database import UserRepository
 from source.infrastructure.hasher.password_hasher import PasswordHasher
 from source.infrastructure.jwt import TokenProvider
 from source.infrastructure.message_broker import MessagePublisher
-from source.infrastructure.storage.storage_adapter import Storage
 from source.settings.config import get_settings, Config
 
 
@@ -45,6 +45,19 @@ async def get_user_repository(
     session: AsyncSession = Depends(get_session),
 ) -> IUserRepository:
     return UserRepository(session=session)
+
+
+async def get_role_repository(
+    session: AsyncSession = Depends(get_session),
+) -> IRoleRepository:
+    return RoleRepository(session)
+
+
+async def get_unit_of_work_factory(
+    session: AsyncSession = Depends(get_session),
+) -> UnitOfWorkFactory:
+    maker = async_sessionmaker(session.bind, expire_on_commit=False)
+    return lambda: UserUnitOfWork(maker)
 
 
 async def get_password_hasher() -> IPasswordHasher:
@@ -77,10 +90,3 @@ async def get_cache_service(
     session: Redis = Depends(get_redis_session),
 ) -> ITokenBlacklist:
     return RedisTokenBlacklist(redis_client=session)
-
-
-async def get_storage(
-    session: Session = Depends(get_aws_session),
-    settings: Config = Depends(get_settings),
-) -> IStorage:
-    return Storage(session=session, bucket_name=settings.storage.bucket_name)

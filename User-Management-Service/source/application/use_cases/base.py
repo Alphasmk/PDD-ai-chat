@@ -11,7 +11,9 @@ class UseCaseBase:
             username=user.username,
             email=user.email.value,
             phone_number=user.phone_number,
-            image_s3_path=user.image_s3_path,
             created_at=user.created_at,
             updated_at=user.updated_at,
+            role=user.role,
+            is_blocked=user.is_blocked,
+            is_superadmin=user.is_superadmin,
         )

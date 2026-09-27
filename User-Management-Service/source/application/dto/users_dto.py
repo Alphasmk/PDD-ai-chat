@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
+from source.domain.value_objects.user_role import UserRole
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -31,5 +32,7 @@ class UserReadDTO:
     email: str
     created_at: datetime
     phone_number: str | None = None
-    image_s3_path: str | None = None
     updated_at: datetime | None = None
+    role: UserRole = UserRole.USER
+    is_blocked: bool = False
+    is_superadmin: bool = False

@@ -10,7 +10,6 @@ from source.settings.separated_configs import (
     DatabaseConfig,
     LoggingConfig,
     BrokerConfig,
-    StorageConfig,
 )
 
 
@@ -23,7 +22,6 @@ class Config:
         self.database = DatabaseConfig()
         self.logging = LoggingConfig()
         self.broker = BrokerConfig()
-        self.storage = StorageConfig()
 
 
 @lru_cache

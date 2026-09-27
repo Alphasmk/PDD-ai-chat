@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
-from sqlalchemy import select, update
+from sqlalchemy import select, update, Select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from source.application.interfaces import IUserRepository
+from source.application.interfaces.bootstrap import IBootstrapRepository
+from source.application.exceptions.user_exceptions import ServiceUnavailableError
+from source.domain.value_objects.user_role import UserRole
 from source.domain.entities.user import UserEntity
 from source.infrastructure.database.models import User as UserORM
 from source.domain.value_objects import ID, Email, Name, PasswordHash
@@ -22,7 +25,7 @@ def as_utc(value: datetime) -> datetime:
     )
 
 
-class UserRepository(IUserRepository):
+class UserRepository(IUserRepository, IBootstrapRepository):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
@@ -35,9 +38,11 @@ class UserRepository(IUserRepository):
             password_hash=PasswordHash(row.password_hash),
             email=Email.from_trusted(row.email),
             phone_number=row.phone_number,
-            image_s3_path=row.image_s3_path,
             created_at=as_utc(row.created_at),
             updated_at=as_utc(row.updated_at) if row.updated_at is not None else None,
+            role=UserRole.from_storage_id(row.role_id),
+            is_blocked=row.is_blocked,
+            is_superadmin=row.is_superadmin,
         )
 
     def _parse_user_error(self, user: UserEntity, error: IntegrityError) -> None:
@@ -70,8 +75,10 @@ class UserRepository(IUserRepository):
             password_hash=user.password_hash.value,
             email=user.email.value,
             phone_number=user.phone_number,
-            image_s3_path=user.image_s3_path,
             created_at=user.created_at.astimezone(timezone.utc).replace(tzinfo=None),
+            role_id=user.role.storage_id,
+            is_blocked=user.is_blocked,
+            is_superadmin=user.is_superadmin,
         )
         try:
             self.session.add(row)
@@ -92,7 +99,6 @@ class UserRepository(IUserRepository):
                 username=user.username,
                 email=user.email.value,
                 phone_number=user.phone_number,
-                image_s3_path=user.image_s3_path,
             )
             .returning(UserORM)
             .execution_options(populate_existing=True)
@@ -112,21 +118,84 @@ class UserRepository(IUserRepository):
             await self.session.flush()
 
     async def get_by_id(self, user_id: ID) -> UserEntity | None:
-        row = await self.session.get(UserORM, user_id.value)
+        return await self._read(select(UserORM).where(UserORM.id == user_id.value))
+
+    async def _read(self, statement: Select[tuple[UserORM]]) -> UserEntity | None:
+        try:
+            row = (
+                await self.session.execute(
+                    statement.execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+        except (SQLAlchemyError, OSError) as error:
+            raise ServiceUnavailableError() from error
         return self._to_domain(row) if row is not None else None
+
+    async def get_for_update(self, user_id: ID) -> UserEntity | None:
+        return await self._read(
+            select(UserORM).where(UserORM.id == user_id.value).with_for_update()
+        )
+
+    async def get_superadmin(self) -> UserEntity | None:
+        return await self._read(select(UserORM).where(UserORM.is_superadmin.is_(True)))
+
+    async def list_page(self, limit: int, offset: int) -> list[UserEntity]:
+        try:
+            rows = (
+                (
+                    await self.session.execute(
+                        select(UserORM)
+                        .order_by(UserORM.created_at, UserORM.id)
+                        .limit(limit)
+                        .offset(offset)
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        except (SQLAlchemyError, OSError) as error:
+            raise ServiceUnavailableError() from error
+        return [self._to_domain(row) for row in rows]
+
+    async def set_role(self, user: UserEntity) -> UserEntity:
+        row = (
+            await self.session.execute(
+                update(UserORM)
+                .where(UserORM.id == user.id.value)
+                .values(
+                    role_id=user.role.storage_id,
+                    updated_at=as_utc(user.updated_at).replace(tzinfo=None)
+                    if user.updated_at
+                    else None,
+                )
+                .returning(UserORM)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        return self._to_domain(row)
+
+    async def set_blocked(self, user: UserEntity) -> UserEntity:
+        row = (
+            await self.session.execute(
+                update(UserORM)
+                .where(UserORM.id == user.id.value)
+                .values(
+                    is_blocked=user.is_blocked,
+                    updated_at=as_utc(user.updated_at).replace(tzinfo=None)
+                    if user.updated_at
+                    else None,
+                )
+                .returning(UserORM)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        return self._to_domain(row)
 
     async def get_by_email(self, user_email: Email) -> UserEntity | None:
-        row = (
-            await self.session.execute(
-                select(UserORM).where(UserORM.email == user_email.value)
-            )
-        ).scalar_one_or_none()
-        return self._to_domain(row) if row is not None else None
+        return await self._read(
+            select(UserORM).where(UserORM.email == user_email.value)
+        )
 
     async def get_by_username(self, username: str) -> UserEntity | None:
-        row = (
-            await self.session.execute(
-                select(UserORM).where(UserORM.username == username)
-            )
-        ).scalar_one_or_none()
-        return self._to_domain(row) if row is not None else None
+        return await self._read(select(UserORM).where(UserORM.username == username))

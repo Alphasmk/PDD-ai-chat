@@ -36,7 +36,9 @@ from source.presentation.api.schemas.base import ErrorResponse
 auth_router = APIRouter(
     prefix="/api/v1/auth",
     tags=["Auth"],
-    responses={code: {"model": ErrorResponse} for code in (400, 401, 404, 409)},
+    responses={
+        code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 503)
+    },
 )
 
 

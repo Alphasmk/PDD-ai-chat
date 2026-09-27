@@ -11,9 +11,6 @@ from .user_deps import (
     get_register_user_use_case,
     get_reset_tokens_use_case,
     get_reset_user_password_use_case,
-    get_get_user_image_use_case,
-    get_set_user_image_use_case,
-    get_delete_user_image_use_case,
 )
 
 __all__ = [
@@ -28,7 +25,4 @@ __all__ = [
     "get_register_user_use_case",
     "get_reset_tokens_use_case",
     "get_reset_user_password_use_case",
-    "get_get_user_image_use_case",
-    "get_set_user_image_use_case",
-    "get_delete_user_image_use_case",
 ]

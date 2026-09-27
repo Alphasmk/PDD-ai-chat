@@ -14,7 +14,7 @@ async def test_subject_only_update_and_empty_patch(
 ) -> None:
     alice, bob = (
         await repository.add(make_user()),
-        await repository.add(make_user("bob", "bob-key")),
+        await repository.add(make_user("bob")),
     )
     use_case = UpdateUser(repository)
     assert (await use_case.execute(subject(alice), UpdateUserDTO())).name == "Alice"

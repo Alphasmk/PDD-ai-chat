@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from source.settings.config import get_settings
 from source.presentation.api.routes.auth_router import auth_router
 from source.presentation.api.routes.user_router import user_router
+from source.presentation.api.routes.roles_router import roles_router
+from source.presentation.api.routes.admin_router import admin_router
 from source.infrastructure.message_broker import BrokerHandler
 from source.presentation.api.schemas.healtcheck import HealthcheckResponse
 from source.infrastructure.database import get_database
@@ -39,6 +41,8 @@ app.add_exception_handler(ApplicationException, application_error_handler)
 app.add_exception_handler(DomainTypeError, application_error_handler)
 app.include_router(auth_router)
 app.include_router(user_router)
+app.include_router(roles_router)
+app.include_router(admin_router)
 
 
 @app.get("/healthcheck", tags=["Health"], response_model=HealthcheckResponse)

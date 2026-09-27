@@ -1,4 +1,4 @@
-"""HTTP tests use a fresh migrated database and isolated storage/publisher ports."""
+"""HTTP tests use a fresh migrated database and isolated publisher/cache/token ports."""
 
 import os
 from collections.abc import AsyncIterator
@@ -10,7 +10,10 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import AsyncClient, ASGITransport, Response
-from sqlalchemy import text
+from sqlalchemy import text, update
+from source.domain.value_objects.user_role import UserRole
+from source.infrastructure.database.models import User
+from uuid import UUID
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -23,11 +26,9 @@ from source.infrastructure.jwt import TokenProvider
 from source.presentation.api.dependencies.adapters import (
     get_session,
     get_token_service,
-    get_storage,
     get_message_broker_service,
     get_cache_service,
 )
-from tests.adapters.storage import FakeStorage
 from tests.adapters.broker_service import FakeMessageService
 from tests.adapters.cache_service import FakeRedisTokenBlacklist
 
@@ -41,6 +42,8 @@ def apply_baseline(connection: Connection) -> None:
 @pytest_asyncio.fixture
 async def engine(tmp_path: Path) -> AsyncIterator[AsyncEngine]:
     postgres_url = os.environ.get("UMS_TEST_POSTGRES_URL")
+    if os.environ.get("UMS_REQUIRE_POSTGRES") == "1" and not postgres_url:
+        pytest.fail("UMS_REQUIRE_POSTGRES=1 requires an isolated UMS_TEST_POSTGRES_URL")
     schema = "ums_test_" + uuid4().hex
     admin: AsyncEngine | None = None
     if postgres_url:
@@ -67,11 +70,6 @@ async def engine(tmp_path: Path) -> AsyncIterator[AsyncEngine]:
 
 
 @pytest.fixture
-def storage() -> FakeStorage:
-    return FakeStorage()
-
-
-@pytest.fixture
 def publisher() -> FakeMessageService:
     return FakeMessageService()
 
@@ -89,7 +87,6 @@ def provider() -> TokenProvider:
 @pytest_asyncio.fixture
 async def client(
     engine: AsyncEngine,
-    storage: FakeStorage,
     publisher: FakeMessageService,
     blacklist: FakeRedisTokenBlacklist,
     provider: TokenProvider,
@@ -106,7 +103,6 @@ async def client(
                 raise
 
     app.dependency_overrides[get_session] = session
-    app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_message_broker_service] = lambda: publisher
     app.dependency_overrides[get_cache_service] = lambda: blacklist
     app.dependency_overrides[get_token_service] = lambda: provider
@@ -170,3 +166,21 @@ async def account(client: AsyncClient, username: str = "alice") -> Account:
         json_string(login, "access_token"),
         json_string(login, "refresh_token"),
     )
+
+
+async def seeded_account(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    username: str,
+    role: UserRole = UserRole.USER,
+    is_superadmin: bool = False,
+) -> Account:
+    result = await account(client, username)
+    async with AsyncSession(engine) as session:
+        await session.execute(
+            update(User)
+            .where(User.id == UUID(result.id))
+            .values(role_id=role.storage_id, is_superadmin=is_superadmin)
+        )
+        await session.commit()
+    return result

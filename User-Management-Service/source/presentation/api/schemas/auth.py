@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 from pydantic import EmailStr
 from source.presentation.api.schemas.base import Base
+from source.domain.value_objects.user_role import UserRole
 
 
 class UserResponse(Base):
@@ -12,8 +13,10 @@ class UserResponse(Base):
     email: EmailStr
     created_at: datetime
     phone_number: str | None = None
-    image_s3_path: str | None = None
     updated_at: datetime | None = None
+    role: UserRole
+    is_blocked: bool
+    is_superadmin: bool
 
 
 class UserSignupRequest(Base):

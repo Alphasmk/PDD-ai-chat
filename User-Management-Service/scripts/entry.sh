@@ -1,9 +1,5 @@
 #!/bin/bash
 set -e
-echo "Running migration script ->"
-
-alembic upgrade head
-
-echo "<- Migration completed"
+python -m scripts.initialize_service
 
 exec "$@"
