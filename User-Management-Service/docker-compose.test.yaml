@@ -1,21 +1,18 @@
- services:
+services:
   postgres_test:
     image: postgres:16-alpine
-    container_name: service_test_database
-    env_file: .env.test
+    env_file: ${UMS_TEST_ENV_FILE:-.env.test}
     ports:
-      - "5434:5432"
+      - "${TEST_POSTGRES_PORT:-5434}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
   redis_test:
     image: redis:7-alpine
-    container_name: service_redis_test
-    restart: always
     ports:
-      - "6380:6379"
-    env_file: .env.test
+      - "${TEST_REDIS_PORT:-6380}:6379"
+    env_file: ${UMS_TEST_ENV_FILE:-.env.test}
     command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
     tmpfs:
       - /data
@@ -26,14 +23,51 @@
       retries: 5
   rabbitmq_test:
     image: rabbitmq:4-management-alpine
-    container_name: service_rabbitmq_test
-    restart: always
     ports:
-      - "5673:5672"
-      - "15673:15672"
-    env_file: .env.test
+      - "${TEST_BROKER_PORT:-5673}:5672"
+      - "${TEST_BROKER_MANAGEMENT_PORT:-15673}:15672"
+    env_file: ${UMS_TEST_ENV_FILE:-.env.test}
+    tmpfs:
+      - /var/lib/rabbitmq
     healthcheck:
       test: rabbitmq-diagnostics -q ping
       interval: 2s
       timeout: 2s
       retries: 5
+
+  app_test:
+    profiles: ["startup"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_HOST: postgres_test
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: disposable
+      POSTGRES_NAME: ums_test
+      REDIS_HOST: redis_test
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: disposable
+      BROKER_HOST: rabbitmq_test
+      BROKER_PORT: 5672
+      BROKER_USER: test
+      BROKER_PASSWORD: disposable
+      SECRET_KEY: disposable-startup-secret-32-characters
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 15
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+      SUPERADMIN_USERNAME: ${SUPERADMIN_USERNAME:-}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
+      SUPERADMIN_NAME: ${SUPERADMIN_NAME:-}
+      SUPERADMIN_SURNAME: ${SUPERADMIN_SURNAME:-}
+    ports:
+      - "${TEST_APP_PORT:-8001}:8000"
+    depends_on:
+      postgres_test:
+        condition: service_healthy
+      redis_test:
+        condition: service_healthy
+      rabbitmq_test:
+        condition: service_healthy

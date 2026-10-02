@@ -1,58 +1,70 @@
+from datetime import datetime, timezone
+from unittest.mock import patch
 import pytest
 from httpx import AsyncClient
-from fastapi import status
-from sqlalchemy import select
-from source.infrastructure.database.models import User
-from source.presentation.api.schemas.auth import UserSignupRequest
+from source.infrastructure.jwt import TokenProvider
+from tests.integration.conftest import account, json_string
 
 
-@pytest.mark.asyncio(loop_scope="session")
-class TestResetTokens:
-    async def test_success(
-        self,
-        client: AsyncClient,
-        override_redis_session_dependency,
-        override_db_session_dependency,
-    ):
-        signup_payload = UserSignupRequest(
-            name="testuser",
-            surname="testuser",
-            username="testuser",
-            password="Test1234",
-            email="test_email@email.com",
+async def test_same_second_rotation_cookie_replay(client: AsyncClient) -> None:
+    user = await account(client)
+    with patch("source.infrastructure.jwt.token_provider.datetime") as clock:
+        clock.now.return_value = datetime.now(timezone.utc)
+        first = await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+        assert first.status_code == 200, first.text
+        new = json_string(first, "refresh_token")
+        assert new != user.refresh
+        assert "httponly" in first.headers["set-cookie"].lower()
+        second = await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+        assert second.status_code == 200 and json_string(second, "refresh_token") != new
+    client.cookies.set("refresh_token", user.refresh)
+    assert (
+        await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+    ).status_code == 401
+
+
+async def test_expired_access_header_is_sufficient(client: AsyncClient) -> None:
+    user = await account(client)
+    expired = TokenProvider("isolated-http-test-secret-32-characters", "HS256", -1, 7)
+    token = await expired.create_access_token(
+        {"sub": user.id, "email": "alice@example.com"}
+    )
+    assert (
+        await client.post(
+            "/api/v1/auth/refresh-token", headers={"Authorization": f"Bearer {token}"}
         )
-        await client.post("/api/v1/auth/signup", json=signup_payload.model_dump())
+    ).status_code == 200
 
-        login_payload = {
-            "username": signup_payload.username,
-            "password": signup_payload.password,
-        }
 
-        login_response = await client.post("/api/v1/auth/login", data=login_payload)
+@pytest.mark.parametrize("cookie", [None, "malformed"])
+async def test_invalid_cookie(client: AsyncClient, cookie: str | None) -> None:
+    user = await account(client)
+    client.cookies.clear()
+    if cookie:
+        client.cookies.set("refresh_token", cookie)
+    assert (
+        await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+    ).status_code == 401
 
-        assert login_response.status_code == 200
 
-        login_data = login_response.json()
-        access_token = login_data["access_token"]
-        refresh_token = login_data["refresh_token"]
+async def test_missing_bearer_deleted_subject(client: AsyncClient) -> None:
+    user = await account(client)
+    assert (await client.post("/api/v1/auth/refresh-token")).status_code == 401
+    assert (
+        await client.delete("/api/v1/users/me", headers=user.headers)
+    ).status_code == 200
+    assert (
+        await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+    ).status_code == 404
 
-        assert "refresh_token" in login_response.cookies
 
-        headers = {"Authorization": f"Bearer {access_token}"}
-
-        reset_response = await client.post(
-            "/api/v1/auth/refresh-token", headers=headers
-        )
-
-        assert reset_response.status_code == status.HTTP_200_OK
-
-        query = select(User).where(User.email == signup_payload.email)
-        db_session = override_db_session_dependency
-        result = await db_session.execute(query)
-        user_in_db = result.scalar_one_or_none()
-
-        cache_session = override_redis_session_dependency
-
-        cache_key = f"blacklist:tokens:{user_in_db.id}:{refresh_token}"
-        token_exists = await cache_session.exists(cache_key)
-        assert token_exists == 1
+async def test_expired_refresh_and_access_cookie(client: AsyncClient) -> None:
+    user = await account(client)
+    expired = TokenProvider("isolated-http-test-secret-32-characters", "HS256", 15, -1)
+    expired_refresh = await expired.create_refresh_token({"sub": user.id})
+    for invalid_cookie in (expired_refresh, user.access):
+        client.cookies.clear()
+        client.cookies.set("refresh_token", invalid_cookie)
+        response = await client.post("/api/v1/auth/refresh-token", headers=user.headers)
+        assert response.status_code == 401
+        assert "set-cookie" not in response.headers

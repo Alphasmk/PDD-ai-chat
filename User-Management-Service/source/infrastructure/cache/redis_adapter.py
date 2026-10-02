@@ -4,7 +4,7 @@ from source.application.interfaces import ITokenBlacklist
 
 
 class RedisTokenBlacklist(ITokenBlacklist):
-    def __init__(self, redis_client: Redis):
+    def __init__(self, redis_client: Redis) -> None:
         self.redis = redis_client
 
     async def add(self, user_id: str, refresh_token: str, exp: int) -> None:
@@ -20,5 +20,9 @@ class RedisTokenBlacklist(ITokenBlacklist):
 
     async def is_blacklisted(self, user_id: str, refresh_token: str) -> bool:
         """Check if refresh token is blacklisted method"""
-        result = await self.redis.exists(f"blacklist:tokens:{user_id}:{refresh_token}")
+        result: object = await self.redis.exists(
+            f"blacklist:tokens:{user_id}:{refresh_token}"
+        )
+        if not isinstance(result, int):
+            raise RuntimeError("Redis returned an invalid blacklist count")
         return result > 0

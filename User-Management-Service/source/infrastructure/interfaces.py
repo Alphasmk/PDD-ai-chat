@@ -1,0 +1,43 @@
+"""Typed lifecycle contracts used only by infrastructure and composition."""
+
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from redis.asyncio import Redis
+from aio_pika.pool import Pool
+from aio_pika.abc import AbstractChannel, AbstractRobustConnection
+
+
+class IDatabaseSessionmaker(ABC):
+    @abstractmethod
+    async def init_db(self, db_url: str) -> None: ...
+    @abstractmethod
+    def get_session(self) -> AsyncIterator[AsyncSession]: ...
+    @abstractmethod
+    async def close(self) -> None: ...
+    @abstractmethod
+    async def get_engine(self) -> AsyncEngine | None: ...
+
+
+class ICacheSessionmaker(ABC):
+    @abstractmethod
+    async def init_db(self, db_url: str) -> None: ...
+    @abstractmethod
+    def get_session(self) -> AsyncIterator[Redis]: ...
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
+class IBrokerHandler(ABC):
+    @abstractmethod
+    async def get_connection(self) -> AbstractRobustConnection: ...
+    @abstractmethod
+    async def get_channel(self) -> AbstractChannel: ...
+    @abstractmethod
+    async def connect(self) -> None: ...
+    @abstractmethod
+    def get_channel_pool(self) -> Pool[AbstractChannel]: ...
+    @abstractmethod
+    async def get_exchange_name(self) -> str: ...
+    @abstractmethod
+    async def close(self) -> None: ...

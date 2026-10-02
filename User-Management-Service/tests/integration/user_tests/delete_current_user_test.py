@@ -1,29 +1,21 @@
-import pytest
 from httpx import AsyncClient
-from fastapi import status
-from sqlalchemy import select
-from source.infrastructure.database.models import User
+from tests.integration.conftest import account, response_data
 
 
-@pytest.mark.asyncio(loop_scope="session")
-class TestDeleteCurrentUser:
-    async def test_success(
-        self, client: AsyncClient, auth_headers, override_db_session_dependency
-    ):
-        headers = await auth_headers()
-
-        await client.get("/api/v1/users/me", headers=headers)
-
-        delete_response = await client.delete("/api/v1/users/me", headers=headers)
-
-        assert delete_response.status_code == status.HTTP_200_OK
-
-        deleted_user_id = delete_response.json()["id"]
-
-        db_session = override_db_session_dependency
-
-        query = select(User).where(User.id == deleted_user_id)
-        result = await db_session.execute(query)
-        user_in_db = result.scalar_one_or_none()
-
-        assert user_in_db is None
+async def test_delete_only_own_account(client: AsyncClient) -> None:
+    alice, bob = await account(client), await account(client, "bob")
+    assert (await client.delete("/api/v1/users/me")).status_code == 401
+    response = await client.delete(
+        "/api/v1/users/me", headers=alice.headers, params={"id": bob.id}
+    )
+    assert response.status_code == 200 and response_data(response) == {
+        "id": alice.id,
+        "username": "alice",
+        "email": "alice@example.com",
+    }
+    assert (
+        await client.get("/api/v1/users/me", headers=bob.headers)
+    ).status_code == 200
+    assert (
+        await client.delete("/api/v1/users/me", headers=alice.headers)
+    ).status_code == 404

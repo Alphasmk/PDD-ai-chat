@@ -1,193 +1,186 @@
+"""HTTP tests use a fresh migrated database and isolated publisher/cache/token ports."""
+
+import os
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+from uuid import uuid4
 import pytest
 import pytest_asyncio
-import logging
-from httpx import AsyncClient, ASGITransport
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
-from source.main import app
-from source.infrastructure.database.session import DatabaseSessionmaker, get_database
-from source.infrastructure.cache import get_cache_database
-from source.infrastructure.cache.session import CacheSessionmaker
-from source.infrastructure.message_broker import BrokerHandler
-from source.presentation.api.dependencies import get_session, get_redis_session
-from source.presentation.api.schemas.auth import UserSignupRequest
-from source.domain.value_objects import ID
-from source.domain.enums.user_role import UserRole
+from httpx import AsyncClient, ASGITransport, Response
+from sqlalchemy import text, update
+from source.domain.value_objects.user_role import UserRole
 from source.infrastructure.database.models import User
-from tests.integration.settings.test_config import get_test_settings
+from uuid import UUID
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    create_async_engine,
+    async_sessionmaker,
+)
+from source.main import app
+from source.infrastructure.jwt import TokenProvider
+from source.presentation.api.dependencies.adapters import (
+    get_session,
+    get_token_service,
+    get_message_broker_service,
+    get_cache_service,
+)
+from tests.adapters.broker_service import FakeMessageService
+from tests.adapters.cache_service import FakeRedisTokenBlacklist
 
 
-@pytest.fixture(scope="session", autouse=True)
-def auto_run_migrations():
-    settings = get_test_settings()
-    alembic_cfg = Config("alembic.ini")
-    alembic_cfg.set_main_option("sqlalchemy.url", str(settings.database.postgres_url))
-    command.upgrade(alembic_cfg, "head")
-    yield
+def apply_baseline(connection: Connection) -> None:
+    config = Config("alembic.ini")
+    config.attributes["connection"] = connection
+    command.upgrade(config, "head")
 
 
-@pytest_asyncio.fixture(scope="function")
-async def test_db_maker():
-    settings = get_test_settings()
-    logging.debug(settings)
-    test_db_url = str(settings.database.postgres_url)
-
-    test_db_sessionmaker = DatabaseSessionmaker()
-    await test_db_sessionmaker.init_db(test_db_url)
-
-    app.dependency_overrides[get_database] = lambda: test_db_sessionmaker
-
-    try:
-        yield test_db_sessionmaker
-    except Exception as e:
-        logging.error(f"Error when connecting to test Postgres database: {str(e)}")
-        raise
-    finally:
-        await test_db_sessionmaker.close()
-        if get_database in app.dependency_overrides:
-            del app.dependency_overrides[get_database]
-
-
-@pytest_asyncio.fixture(scope="function")
-async def test_cache_maker():
-    settings = get_test_settings()
-    test_cache_url = str(settings.cache.redis_url)
-
-    test_cache_sessionmaker = CacheSessionmaker()
-    await test_cache_sessionmaker.init_db(test_cache_url)
-
-    app.dependency_overrides[get_cache_database] = lambda: test_cache_sessionmaker
-
-    try:
-        yield test_cache_sessionmaker
-    except Exception as e:
-        logging.error(f"Error when connecting to test Redis database: {str(e)}")
-        raise
-    finally:
-        await test_cache_sessionmaker.close()
-        if get_cache_database in app.dependency_overrides:
-            del app.dependency_overrides[get_cache_database]
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def test_broker_maker():
-    settings = get_test_settings()
-    test_broker_url = str(settings.broker.rabbit_url)
-
-    test_broker_sessionmaker = BrokerHandler(test_broker_url)
-    await test_broker_sessionmaker.connect()
-    old_connection = getattr(app.state, "broker", None)
-    app.state.broker = test_broker_sessionmaker
-
-    try:
-        yield
-    except Exception as e:
-        logging.error(f"Error when connecting to test RabbitMQ: {str(e)}")
-        raise
-    finally:
-        await test_broker_sessionmaker.close()
-        app.state.broker = old_connection
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def override_db_session_dependency(test_db_maker):
-    engine = await test_db_maker.get_engine()
-
-    async with engine.connect() as conn:
-        transaction = await conn.begin()
-        session = AsyncSession(
-            bind=conn,
-            join_transaction_mode="create_savepoint",
-            expire_on_commit=False,
+@pytest_asyncio.fixture
+async def engine(tmp_path: Path) -> AsyncIterator[AsyncEngine]:
+    postgres_url = os.environ.get("UMS_TEST_POSTGRES_URL")
+    if os.environ.get("UMS_REQUIRE_POSTGRES") == "1" and not postgres_url:
+        pytest.fail("UMS_REQUIRE_POSTGRES=1 requires an isolated UMS_TEST_POSTGRES_URL")
+    schema = "ums_test_" + uuid4().hex
+    admin: AsyncEngine | None = None
+    if postgres_url:
+        if not postgres_url.startswith("postgresql+asyncpg://"):
+            raise ValueError("UMS_TEST_POSTGRES_URL must use postgresql+asyncpg")
+        admin = create_async_engine(postgres_url)
+        async with admin.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        database = create_async_engine(
+            postgres_url, connect_args={"server_settings": {"search_path": schema}}
         )
+    else:
+        database = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'users.db'}")
+    try:
+        async with database.begin() as connection:
+            await connection.run_sync(apply_baseline)
+        yield database
+    finally:
+        await database.dispose()
+        if admin is not None:
+            async with admin.begin() as connection:
+                await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            await admin.dispose()
 
-        async def _get_current_session():
+
+@pytest.fixture
+def publisher() -> FakeMessageService:
+    return FakeMessageService()
+
+
+@pytest.fixture
+def blacklist() -> FakeRedisTokenBlacklist:
+    return FakeRedisTokenBlacklist()
+
+
+@pytest.fixture
+def provider() -> TokenProvider:
+    return TokenProvider("isolated-http-test-secret-32-characters", "HS256", 15, 7)
+
+
+@pytest_asyncio.fixture
+async def client(
+    engine: AsyncEngine,
+    publisher: FakeMessageService,
+    blacklist: FakeRedisTokenBlacklist,
+    provider: TokenProvider,
+) -> AsyncIterator[AsyncClient]:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def session() -> AsyncIterator[AsyncSession]:
+        async with maker() as db:
             try:
-                yield session
-                await session.commit()
+                yield db
+                await db.commit()
             except Exception:
-                await session.rollback()
+                await db.rollback()
                 raise
 
-        app.dependency_overrides[get_session] = _get_current_session
-
-        try:
-            yield session
-        finally:
-            await session.close()
-            await transaction.rollback()
-
-            if get_session in app.dependency_overrides:
-                del app.dependency_overrides[get_session]
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def override_redis_session_dependency(test_cache_maker):
-    session_generator = test_cache_maker.get_session()
-    session = await anext(session_generator)
-
-    async def _get_redis_session():
-        return session
-
-    app.dependency_overrides[get_redis_session] = _get_redis_session
-
+    app.dependency_overrides[get_session] = session
+    app.dependency_overrides[get_message_broker_service] = lambda: publisher
+    app.dependency_overrides[get_cache_service] = lambda: blacklist
+    app.dependency_overrides[get_token_service] = lambda: provider
     try:
-        yield session
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as http:
+            yield http
     finally:
-        await session.flushdb()
-        if get_redis_session in app.dependency_overrides:
-            del app.dependency_overrides[get_redis_session]
+        app.dependency_overrides.clear()
 
 
-@pytest_asyncio.fixture(scope="function")
-async def client():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        yield ac
+def response_data(response: Response) -> dict[str, object]:
+    raw: object = response.json()
+    assert isinstance(raw, dict)
+    result: dict[str, object] = {}
+    for key, value in raw.items():
+        assert isinstance(key, str)
+        result[key] = value
+    return result
 
 
-@pytest_asyncio.fixture(scope="function")
-async def auth_headers(client: AsyncClient, override_db_session_dependency):
-    async def _make_headers(role: str = "user") -> dict:
-        unique_id = str(ID().value)[:8]
+def json_string(response: Response, key: str) -> str:
+    value = response_data(response)[key]
+    assert isinstance(value, str)
+    return value
 
-        user_role = UserRole.USER
 
-        match role:
-            case "admin":
-                user_role = UserRole.ADMIN
-            case "moderator":
-                user_role = UserRole.MODERATOR
+def signup_payload(username: str = "alice") -> dict[str, str]:
+    return {
+        "name": "Alice",
+        "surname": "Smith",
+        "username": username,
+        "password": "Test1234",
+        "email": f"{username}@example.com",
+    }
 
-        signup_payload = UserSignupRequest(
-            name="testuser",
-            surname="testuser",
-            username=f"{role}_{unique_id}",
-            password="Test1234",
-            email=f"{role}_{unique_id}@email.com",
+
+@dataclass(frozen=True)
+class Account:
+    id: str
+    username: str
+    access: str
+    refresh: str
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access}"}
+
+
+async def account(client: AsyncClient, username: str = "alice") -> Account:
+    signup = await client.post("/api/v1/auth/signup", json=signup_payload(username))
+    assert signup.status_code == 201, signup.text
+    login = await client.post(
+        "/api/v1/auth/login", data={"username": username, "password": "Test1234"}
+    )
+    assert login.status_code == 200, login.text
+    return Account(
+        json_string(signup, "id"),
+        username,
+        json_string(login, "access_token"),
+        json_string(login, "refresh_token"),
+    )
+
+
+async def seeded_account(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    username: str,
+    role: UserRole = UserRole.USER,
+    is_superadmin: bool = False,
+) -> Account:
+    result = await account(client, username)
+    async with AsyncSession(engine) as session:
+        await session.execute(
+            update(User)
+            .where(User.id == UUID(result.id))
+            .values(role_id=role.storage_id, is_superadmin=is_superadmin)
         )
-
-        await client.post("/api/v1/auth/signup", json=signup_payload.model_dump())
-
-        if user_role != UserRole.USER:
-            db_session = override_db_session_dependency
-            await db_session.execute(
-                update(User)
-                .where(User.username == signup_payload.username)
-                .values(role=user_role)
-            )
-            await db_session.commit()
-
-        login_payload = {
-            "username": signup_payload.username,
-            "password": signup_payload.password,
-        }
-        login_response = await client.post("/api/v1/auth/login", data=login_payload)
-        access_token = login_response.json()["access_token"]
-
-        return {"Authorization": f"Bearer {access_token}"}
-
-    return _make_headers
+        await session.commit()
+    return result

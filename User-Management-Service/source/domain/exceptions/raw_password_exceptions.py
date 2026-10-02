@@ -10,6 +10,6 @@ class PasswordLengthError(DomainTypeError):
 
 
 class PasswordPatternError(DomainTypeError):
-    def __init__(self):
+    def __init__(self) -> None:
         message = "The password has an invalid pattern"
         super().__init__(message)

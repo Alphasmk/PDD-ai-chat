@@ -1,112 +1,42 @@
 import pytest
-from tests.unit.utils.shared_data import BASE_USERS
 from source.application.use_cases import DeleteUser
-from source.application.dto import DataFromTokenDTO
-from source.domain.entities.user import UserEntity
-from source.domain.enums.user_role import UserRole
-from source.domain.value_objects import ID, Email, PasswordHash, Name
-from source.domain.exceptions import UserDeleteNotAllowedError
-from source.application.exceptions import ActionNotAllowedError, UserNotFoundError
+from source.application.exceptions import UserNotFoundError
+from tests.adapters.user_repository import FakeUserRepository
+from tests.adapters.unit_of_work import FakeUnitOfWork
+from dataclasses import replace
+from source.domain.value_objects.user_role import UserRole
+from source.application.exceptions.user_exceptions import (
+    ProtectedAccountError,
+    ServiceUnavailableError,
+)
+from tests.unit.utils.shared_data import make_user, subject
 
 
-@pytest.mark.asyncio
-class TestDeleteUser:
-    async def test_success(self, repository):
-        use_case = DeleteUser(repo=repository)
-        existing_user = UserEntity(
-            name=Name("testname"),
-            surname=Name("testsurname"),
-            username="testusername",
-            password_hash=PasswordHash("hash_test1234"),
-            email=Email("test@test.com"),
-        )
-        created_user = await repository.add(existing_user)
-
-        current_user = DataFromTokenDTO(
-            user_id=ID().value,
-            email="current@current.com",
-            role=UserRole.ADMIN,
-        )
-
-        user_id_to_delete = created_user.id.value
-
-        await use_case.execute(user_id_to_delete, current_user)
-
-        assert await repository.get_by_id(created_user.id) is None
-
-    @pytest.mark.parametrize(
-        "role, current_user_id, user_id_to_delete, user_to_delete_role, access, expected_exception",
-        [
-            (*BASE_USERS["A_SELF"], True, None),
-            (*BASE_USERS["M_SELF"], True, None),
-            (*BASE_USERS["U_SELF"], True, None),
-            (*BASE_USERS["A_TO_U"], True, None),
-            (*BASE_USERS["SA_TO_U"], True, None),
-            (*BASE_USERS["SA_TO_A"], True, None),
-            (*BASE_USERS["SA_SELF"], False, UserDeleteNotAllowedError),
-            (*BASE_USERS["A_TO_SA"], False, UserDeleteNotAllowedError),
-            (*BASE_USERS["M_TO_U"], False, ActionNotAllowedError),
-            (*BASE_USERS["U_TO_U"], False, ActionNotAllowedError),
-        ],
-        ids=[
-            "admin_deletes_himself",
-            "moderator_deletes_himself",
-            "user_deletes_himself",
-            "admin_deletes_user",
-            "super_admin_deletes_user",
-            "super_admin_deletes_admin",
-            "super_admin_deletes_himself",
-            "admin_deletes_super_admin",
-            "moderator_deletes_user",
-            "user_deletes_user",
-        ],
+async def test_deletes_subject_only(repository: FakeUserRepository) -> None:
+    alice, bob = (
+        await repository.add(make_user()),
+        await repository.add(make_user("bob")),
     )
-    async def test_is_allow_to_delete_user(
-        self,
-        repository,
-        role,
-        current_user_id,
-        user_id_to_delete,
-        user_to_delete_role,
-        access,
-        expected_exception,
-    ):
-        use_case = DeleteUser(repo=repository)
-        existing_user = UserEntity(
-            id=user_id_to_delete,
-            name=Name("testname"),
-            surname=Name("testsurname"),
-            username="testusername",
-            password_hash=PasswordHash("hash_test1234"),
-            email=Email("test@test.com"),
-            role=user_to_delete_role,
+    result = await DeleteUser(lambda: FakeUnitOfWork(repository)).execute(
+        subject(alice)
+    )
+    assert result.id == alice.id.value
+    assert repository.users == {str(bob.id.value): bob}
+    with pytest.raises(UserNotFoundError):
+        await DeleteUser(lambda: FakeUnitOfWork(repository)).execute(subject(alice))
+
+
+async def test_protected_delete_and_commit_failure(
+    repository: FakeUserRepository,
+) -> None:
+    owner = await repository.add(
+        replace(make_user("owner"), role=UserRole.ADMIN, is_superadmin=True)
+    )
+    with pytest.raises(ProtectedAccountError):
+        await DeleteUser(lambda: FakeUnitOfWork(repository)).execute(subject(owner))
+    user = await repository.add(make_user())
+    with pytest.raises(ServiceUnavailableError):
+        await DeleteUser(lambda: FakeUnitOfWork(repository, fail_commit=True)).execute(
+            subject(user)
         )
-        created_user = await repository.add(existing_user)
-
-        current_user = DataFromTokenDTO(
-            user_id=current_user_id.value,
-            email="current@current.com",
-            role=role,
-        )
-
-        user_id_to_delete = created_user.id.value
-
-        if not access:
-            with pytest.raises(expected_exception):
-                await use_case.execute(user_id_to_delete, current_user)
-        else:
-            await use_case.execute(user_id_to_delete, current_user)
-            assert await repository.get_by_id(created_user.id) is None
-
-    async def test_user_not_exists(self, repository):
-        use_case = DeleteUser(repo=repository)
-        user_id_to_delete = ID()
-
-        current_user = DataFromTokenDTO(
-            user_id=ID().value,
-            email="current@current.com",
-            role=UserRole.ADMIN,
-        )
-
-        with pytest.raises(UserNotFoundError):
-            await use_case.execute(user_id_to_delete, current_user)
+    assert await repository.get_by_id(user.id) == user

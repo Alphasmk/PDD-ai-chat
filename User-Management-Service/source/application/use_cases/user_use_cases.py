@@ -1,55 +1,71 @@
+from dataclasses import replace
 from uuid import UUID
-
-from dataclasses import replace, asdict, fields
-
-from typing import List
+from source.domain.policies.user_access import require_active
+from source.domain.exceptions.user_access_exceptions import (
+    UserBlocked,
+    ProtectedAccount,
+)
+from source.application.exceptions.user_exceptions import access_error
+from source.application.interfaces.unit_of_work import UnitOfWorkFactory
+from source.domain.value_objects.user_role import UserRole
 from source.application.use_cases.base import UseCaseBase
 from source.application.interfaces import (
     ITokenProvider,
     ITokenBlacklist,
     IUserRepository,
     IMessagePublisher,
-    IStorage,
 )
 from source.application.dto import (
     UserCreateDTO,
     UserReadDTO,
     UpdateUserDTO,
-    UserPaginationDTO,
-    UserRoleChangeDTO,
     TokenDTO,
     DataFromTokenDTO,
 )
-from source.domain.interfaces.password_hasher import IPasswordHasher
+from source.domain.interfaces import IPasswordHasher
 from source.domain.entities.user import UserEntity as User
-from source.domain.enums.user_role import UserRole
 from source.domain.value_objects import ID, Name, Email, RawPassword
-from source.domain.exceptions import (
-    UserBlockedError,
-    UserDeleteNotAllowedError,
-    CannotBlockAdminError,
-    AdminRegularAssignError,
-    RoleIsUnassignableOrChangable,
-    AdminCannotChangeAdminsRoleError,
-)
-
 from source.application.exceptions import (
     InvalidCredentialsError,
     UserNotFoundError,
     InvalidTokenError,
     MissingTokenError,
     TokenRevokedError,
-    ActionNotAllowedError,
-    UserEditNotAllowedError,
-    UserGetInfoNotAllowed,
-    ModeratorGetInfoNotAllowed,
-    InvalidSortFieldError,
-    CannotChangeImageError,
-    UploadImageError,
-    UserHasNoImageError,
-    ImageReceivingError,
-    CannotDeleteImageError,
 )
+
+
+def token_subject(payload: dict[str, str | int]) -> UUID:
+    subject = payload.get("sub")
+    if not isinstance(subject, str):
+        raise InvalidTokenError()
+    try:
+        return UUID(subject)
+    except ValueError as error:
+        raise InvalidTokenError() from error
+
+
+async def require_user(repo: IUserRepository, subject: DataFromTokenDTO) -> User:
+    user = await repo.get_by_id(ID(subject.user_id))
+    if user is None:
+        raise UserNotFoundError()
+    ensure_active(user)
+    return user
+
+
+def ensure_active(user: User) -> None:
+    try:
+        require_active(user)
+    except UserBlocked as error:
+        raise access_error(error) from error
+
+
+async def issue_tokens(provider: ITokenProvider, user: User) -> TokenDTO:
+    return TokenDTO(
+        access=await provider.create_access_token(
+            {"sub": str(user.id.value), "email": user.email.value}
+        ),
+        refresh=await provider.create_refresh_token({"sub": str(user.id.value)}),
+    )
 
 
 class RegisterUser(UseCaseBase):
@@ -57,25 +73,20 @@ class RegisterUser(UseCaseBase):
         self.repo = repo
         self.hasher = hasher
 
-    async def execute(self, data: UserCreateDTO) -> UserReadDTO | None:
-        hashed_password = await self.hasher.hash(RawPassword(data.password))
-
+    async def execute(self, data: UserCreateDTO) -> UserReadDTO:
+        name, surname, email = Name(data.name), Name(data.surname), Email(data.email)
+        password = await self.hasher.hash(RawPassword(data.password))
         user = User(
-            name=Name(data.name),
-            surname=Name(data.surname),
+            name=name,
+            surname=surname,
             username=data.username,
-            password_hash=hashed_password,
-            email=Email(data.email),
-            image_s3_path=data.image_s3_path,
+            password_hash=password,
+            email=email,
             phone_number=data.phone_number,
+            role=UserRole.USER,
+            is_blocked=False,
         )
-
-        saved_user = await self.repo.add(user)
-
-        if not saved_user:
-            return None
-
-        return self._to_user_read_dto(saved_user)
+        return self._to_user_read_dto(await self.repo.add(user))
 
 
 class UpdateUser(UseCaseBase):
@@ -83,74 +94,53 @@ class UpdateUser(UseCaseBase):
         self.repo = repo
 
     async def execute(
-        self, user_id: UUID, current_user: DataFromTokenDTO, data: UpdateUserDTO
-    ) -> UserReadDTO | None:
-        existing_user = await self.repo.get_by_id(ID(user_id))
-        if not existing_user:
-            raise UserNotFoundError()
-
-        is_admin = current_user.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-        is_self_edit = str(user_id) == str(current_user.user_id)
-
-        if not (is_admin or is_self_edit):
-            raise ActionNotAllowedError(
-                "You can only edit your own account or be an admin"
+        self, current_user: DataFromTokenDTO, data: UpdateUserDTO
+    ) -> UserReadDTO:
+        user = await require_user(self.repo, current_user)
+        if all(
+            value is None
+            for value in (
+                data.name,
+                data.surname,
+                data.username,
+                data.email,
+                data.phone_number,
             )
-
-        if existing_user.role == UserRole.SUPER_ADMIN and not is_self_edit:
-            raise UserEditNotAllowedError()
-
-        if not existing_user:
-            return None
-
-        update_data = {
-            key: value for key, value in asdict(data).items() if value is not None
-        }
-
-        if not update_data:
-            return self._to_user_read_dto(existing_user)
-
-        if "name" in update_data:
-            update_data["name"] = Name(update_data["name"])
-        if "surname" in update_data:
-            update_data["surname"] = Name(update_data["surname"])
-        if "email" in update_data:
-            update_data["email"] = Email(update_data["email"])
-
-        updated_user_entity = replace(existing_user, **update_data)
-
-        saved_user = await self.repo.update(updated_user_entity)
-
-        if not saved_user:
-            return None
-
-        return self._to_user_read_dto(saved_user)
+        ):
+            return self._to_user_read_dto(user)
+        updated = replace(
+            user,
+            name=Name(data.name) if data.name is not None else user.name,
+            surname=Name(data.surname) if data.surname is not None else user.surname,
+            email=Email(data.email) if data.email is not None else user.email,
+            username=data.username if data.username is not None else user.username,
+            phone_number=data.phone_number
+            if data.phone_number is not None
+            else user.phone_number,
+        )
+        saved = await self.repo.update(updated)
+        if saved is None:
+            raise UserNotFoundError()
+        return self._to_user_read_dto(saved)
 
 
 class DeleteUser(UseCaseBase):
-    def __init__(self, repo: IUserRepository) -> None:
-        self.repo = repo
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self.uow_factory = uow_factory
 
-    async def execute(
-        self, user_id: UUID, current_user: DataFromTokenDTO
-    ) -> UserReadDTO:
-        user_to_delete = await self.repo.get_by_id(ID(user_id))
-        if not user_to_delete:
-            raise UserNotFoundError()
-        if user_to_delete.role == UserRole.SUPER_ADMIN:
-            raise UserDeleteNotAllowedError()
-
-        is_admin = current_user.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-        is_self_delete = str(user_id) == str(current_user.user_id)
-
-        if not (is_admin or is_self_delete):
-            raise ActionNotAllowedError(
-                "You can only delete your own account or be an admin"
-            )
-
-        await self.repo.delete(user_to_delete)
-
-        return self._to_user_read_dto(user_to_delete)
+    async def execute(self, current_user: DataFromTokenDTO) -> UserReadDTO:
+        async with self.uow_factory() as uow:
+            user = await uow.repository.get_for_update(ID(current_user.user_id))
+            if user is None:
+                raise UserNotFoundError()
+            ensure_active(user)
+            try:
+                user.ensure_deletable()
+            except ProtectedAccount as error:
+                raise access_error(error) from error
+            await uow.repository.delete(user)
+            await uow.commit()
+            return self._to_user_read_dto(user)
 
 
 class LoginUser(UseCaseBase):
@@ -160,113 +150,79 @@ class LoginUser(UseCaseBase):
         hasher: IPasswordHasher,
         token_service: ITokenProvider,
     ) -> None:
-        self.repo = repo
-        self.hasher = hasher
-        self.token_service = token_service
+        self.repo, self.hasher, self.token_service = repo, hasher, token_service
 
     async def execute(self, username: str, password: str) -> TokenDTO:
         user = await self.repo.get_by_username(username)
-        if not user or not await self.hasher.verify(password, user.password_hash.value):
+        if user is None or not await self.hasher.verify(
+            password, user.password_hash.value
+        ):
             raise InvalidCredentialsError()
-        if user.is_blocked:
-            raise UserBlockedError(user.username)
-        access_payload = {
-            "sub": str(user.id.value),
-            "email": user.email.value,
-            "role": user.role.value,
-            "group_id": str(user.group_id) if user.group_id else "",
-        }
-        access_token = await self.token_service.create_access_token(access_payload)
-        refresh_payload = {"sub": str(user.id.value)}
-        refresh_token = await self.token_service.create_refresh_token(refresh_payload)
-        return TokenDTO(access=access_token, refresh=refresh_token)
+        ensure_active(user)
+        return await issue_tokens(self.token_service, user)
+
+
+class GetCurrentUserFromToken:
+    def __init__(self, repo: IUserRepository, token_service: ITokenProvider) -> None:
+        self.repo, self.token_service = repo, token_service
+
+    async def execute(self, token: str) -> DataFromTokenDTO:
+        payload = await self.token_service.decode_token(token)
+        subject = token_subject(payload)
+        if not isinstance(payload.get("email"), str) or "jti" in payload:
+            raise InvalidTokenError()
+        user = await self.repo.get_by_id(ID(subject))
+        if user is None:
+            raise UserNotFoundError()
+        ensure_active(user)
+        return DataFromTokenDTO(user_id=user.id.value, email=user.email.value)
 
 
 class GetCurrentUserFromDB(UseCaseBase):
     def __init__(self, repo: IUserRepository, token_service: ITokenProvider) -> None:
-        self.token_service = token_service
-        self.repo = repo
+        self.repo, self.token_service = repo, token_service
 
     async def execute(self, token: str) -> UserReadDTO:
-        decoded_token = await self.token_service.decode_token(token)
-        user_id = decoded_token.get("sub")
-        if not user_id:
-            raise UserNotFoundError()
-        user = await self.repo.get_by_id(ID(user_id))
-        if not user:
-            raise UserNotFoundError()
-        return self._to_user_read_dto(user)
-
-
-class GetCurrentUserFromToken(UseCaseBase):
-    def __init__(self, token_service: ITokenProvider) -> None:
-        self.token_service = token_service
-
-    async def execute(self, token: str) -> DataFromTokenDTO:
-        decoded_token = await self.token_service.decode_token(token)
-
-        user_id = decoded_token.get("sub")
-        user_email = decoded_token.get("email")
-        user_role = decoded_token.get("role")
-
-        if not user_id or not user_email or not user_role:
-            raise UserNotFoundError()
-
-        user_group_id = decoded_token.get("group_id")
-
-        return DataFromTokenDTO(
-            user_id=UUID(str(user_id)),
-            email=str(user_email),
-            role=str(user_role),
-            group_id=UUID(str(user_group_id)) if user_group_id else None,
+        subject = await GetCurrentUserFromToken(self.repo, self.token_service).execute(
+            token
         )
+        return self._to_user_read_dto(await require_user(self.repo, subject))
 
 
-class ResetTokens(UseCaseBase):
+class ResetTokens:
     def __init__(
         self,
         repo: IUserRepository,
         token_service: ITokenProvider,
         cache_service: ITokenBlacklist,
     ) -> None:
-        self.repo = repo
-        self.token_service = token_service
-        self.cache_service = cache_service
+        self.repo, self.token_service, self.cache_service = (
+            repo,
+            token_service,
+            cache_service,
+        )
 
     async def execute(self, refresh_token: str | None) -> TokenDTO:
         if not refresh_token:
             raise MissingTokenError()
-
-        decoded_token = await self.token_service.decode_token(refresh_token)
-        user_id = decoded_token.get("sub")
-        exp = decoded_token.get("exp")
-        if user_id is None or exp is None:
+        payload = await self.token_service.decode_token(refresh_token)
+        subject = token_subject(payload)
+        exp = payload.get("exp")
+        if (
+            not isinstance(exp, int)
+            or not isinstance(payload.get("jti"), str)
+            or "email" in payload
+        ):
             raise InvalidTokenError()
-
-        user = await self.repo.get_by_id(ID(user_id))
-
-        if user:
-            if await self.cache_service.is_blacklisted(str(user_id), refresh_token):
-                raise TokenRevokedError()
-
-            await self.cache_service.add(
-                user_id=str(user_id), refresh_token=refresh_token, exp=exp
-            )
-
-            access_payload = {
-                "sub": str(user.id.value),
-                "email": user.email.value,
-                "role": user.role.value,
-                "group_id": user.group_id,
-            }
-            access_token = await self.token_service.create_access_token(access_payload)
-            refresh_payload = {"sub": str(user.id.value)}
-            refresh_token = await self.token_service.create_refresh_token(
-                refresh_payload
-            )
-            return TokenDTO(access=access_token, refresh=refresh_token)
-        else:
+        user = await self.repo.get_by_id(ID(subject))
+        if user is None:
             raise UserNotFoundError()
+        ensure_active(user)
+        if await self.cache_service.is_blacklisted(str(subject), refresh_token):
+            raise TokenRevokedError()
+        tokens = await issue_tokens(self.token_service, user)
+        await self.cache_service.add(str(subject), refresh_token, exp)
+        return tokens
 
 
 class ResetUserPassword:
@@ -282,214 +238,3 @@ class ResetUserPassword:
             queue_name=queue_name,
             dead_letter_queue_name=dlq_name,
         )
-
-
-class GetUser(UseCaseBase):
-    def __init__(self, repo: IUserRepository) -> None:
-        self.repo = repo
-
-    async def execute(
-        self, user_id: UUID, current_user: DataFromTokenDTO
-    ) -> UserReadDTO:
-        existing_user = await self.repo.get_by_id(ID(user_id))
-        if not existing_user:
-            raise UserNotFoundError()
-
-        is_admin = current_user.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-
-        is_user_from_group = (
-            current_user.role == UserRole.MODERATOR
-            and existing_user.group_id
-            and current_user.group_id == existing_user.group_id
-        )
-
-        if not (is_admin or is_user_from_group):
-            if current_user.role == UserRole.MODERATOR:
-                raise ModeratorGetInfoNotAllowed()
-            raise UserGetInfoNotAllowed()
-
-        return self._to_user_read_dto(existing_user)
-
-
-class GetUsersWithPagination(UseCaseBase):
-    def __init__(self, repo: IUserRepository) -> None:
-        self.repo = repo
-
-    async def execute(
-        self, params: UserPaginationDTO, current_user: DataFromTokenDTO
-    ) -> List[UserReadDTO]:
-        if current_user.role == UserRole.USER:
-            raise ActionNotAllowedError("You cannot get info about users")
-
-        if params.sort_by:
-            valid_fields = {f.name for f in fields(User)}
-            if params.sort_by not in valid_fields:
-                raise InvalidSortFieldError()
-        if current_user.role == UserRole.MODERATOR:
-            params = replace(params, group=current_user.group_id)
-
-        users = await self.repo.get_users(params)
-        return [self._to_user_read_dto(user) for user in users]
-
-
-class ChangeUserBlockState(UseCaseBase):
-    def __init__(self, repo: IUserRepository):
-        self.repo = repo
-
-    async def execute(self, user_id: UUID, current_user: DataFromTokenDTO) -> bool:
-        existing_user = await self.repo.get_by_id(ID(user_id))
-        if not existing_user:
-            raise UserNotFoundError()
-        if (
-            current_user.role == UserRole.USER
-            or current_user.role == UserRole.MODERATOR
-        ):
-            raise ActionNotAllowedError("You cannot block users")
-
-        if (
-            existing_user.role == UserRole.ADMIN
-            or existing_user.role == UserRole.SUPER_ADMIN
-        ):
-            raise CannotBlockAdminError()
-
-        result = await self.repo.change_block_state(ID(user_id))
-
-        if result is None:
-            raise UserNotFoundError()
-
-        return result
-
-
-class ChangeUserRole(UseCaseBase):
-    def __init__(self, repo: IUserRepository):
-        self.repo = repo
-
-    async def execute(
-        self, user_id: UUID, role: UserRoleChangeDTO, current_user: DataFromTokenDTO
-    ) -> None:
-        if (
-            current_user.role == UserRole.USER
-            or current_user.role == UserRole.MODERATOR
-        ):
-            raise ActionNotAllowedError("You cannot change user roles")
-        existing_user = await self.repo.get_by_id(ID(user_id))
-        if not existing_user:
-            raise UserNotFoundError()
-        if existing_user.role.is_changable and role.role.is_assignable:
-            if current_user.role == UserRole.ADMIN:
-                if existing_user.role == UserRole.ADMIN:
-                    raise AdminCannotChangeAdminsRoleError()
-                if role.role == UserRole.ADMIN:
-                    raise AdminRegularAssignError()
-            await self.repo.change_role(ID(user_id), role.role)
-        else:
-            raise RoleIsUnassignableOrChangable()
-
-
-class CreateSuperUser(UseCaseBase):
-    def __init__(self, repo: IUserRepository, hasher: IPasswordHasher):
-        self.repo = repo
-        self.hasher = hasher
-
-    async def execute(self, username: str, password: str, email: str) -> None:
-        existing_user = await self.repo.get_by_username(username)
-        if existing_user:
-            return
-
-        hashed_password = await self.hasher.hash(RawPassword(password))
-        super_admin = User(
-            name=Name("admin"),
-            surname=Name("admin"),
-            username=username,
-            password_hash=hashed_password,
-            email=Email(email),
-            role=UserRole.SUPER_ADMIN,
-        )
-        await self.repo.add(super_admin)
-
-
-class SetUserImage(UseCaseBase):
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo = repo
-        self.storage_service = storage_service
-
-    async def execute(
-        self,
-        image: bytes,
-        image_extension: str,
-        user_id_to_set: UUID,
-        current_user: DataFromTokenDTO,
-    ) -> str:
-
-        can_change = (current_user.user_id == user_id_to_set) or (
-            current_user.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-        )
-        if not can_change:
-            raise CannotChangeImageError()
-
-        existing_user = await self.repo.get_by_id(ID(user_id_to_set))
-        if not existing_user:
-            raise UserNotFoundError()
-
-        old_image_path = existing_user.image_s3_path
-        new_image_path = await self.storage_service.upload_image(image, image_extension)
-
-        if not new_image_path:
-            raise UploadImageError()
-
-        user_to_update = replace(existing_user, image_s3_path=new_image_path)
-        await self.repo.update(user_to_update)
-
-        if old_image_path:
-            await self.storage_service.delete_image(old_image_path)
-
-        return new_image_path
-
-
-class GetUserImage(UseCaseBase):
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo = repo
-        self.storage_service = storage_service
-
-    async def execute(self, user_id: UUID) -> str:
-        existing_user = await self.repo.get_by_id((ID(user_id)))
-        if not existing_user:
-            raise UserNotFoundError()
-
-        if not existing_user.image_s3_path:
-            raise UserHasNoImageError(existing_user.username)
-
-        url = await self.storage_service.get_image_url(
-            existing_user.image_s3_path, expires_in=3600
-        )
-
-        if not url:
-            raise ImageReceivingError()
-
-        return url
-
-
-class DeleteUserImage(UseCaseBase):
-    def __init__(self, repo: IUserRepository, storage_service: IStorage) -> None:
-        self.repo = repo
-        self.storage_service = storage_service
-
-    async def execute(self, user_id: UUID, current_user: DataFromTokenDTO) -> None:
-        can_delete = (current_user.user_id == user_id) or (
-            current_user.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-        )
-        if not can_delete:
-            raise CannotDeleteImageError()
-
-        existing_user = await self.repo.get_by_id((ID(user_id)))
-        if not existing_user:
-            raise UserNotFoundError()
-
-        if not existing_user.image_s3_path:
-            raise UserHasNoImageError(existing_user.username)
-
-        user_to_update = replace(existing_user, image_s3_path=None)
-
-        await self.repo.update(user_to_update)
-
-        await self.storage_service.delete_image(existing_user.image_s3_path)
